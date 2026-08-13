@@ -14,6 +14,7 @@ namespace XRaySystem.WPF
         public MainWindow(LiveTelemetryViewModel viewModel)
         {
             InitializeComponent();
+
             DataContext = viewModel;
 
             Loaded += MainWindow_Loaded;

@@ -5,5 +5,7 @@ public enum DeviceStatus
     Disconnected,
     Connected,
     Capturing,
+    Snapping,
+    Frozen,
     Error
 }

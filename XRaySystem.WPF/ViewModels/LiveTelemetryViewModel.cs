@@ -9,7 +9,7 @@ using XRaySystem.Application.DTOs;
 using XRaySystem.Application.UseCases;
 using XRaySystem.Domain.Entities;
 using XRaySystem.Domain.Interfaces;
-using XRaySystem.Infrastructure.Sensors;
+using XRaySystem.Domain.ValueObjects;
 using XRaySystem.WPF.Services;
 
 namespace XRaySystem.WPF.ViewModels;
@@ -25,6 +25,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private readonly ResumeLiveUseCase _resumeLiveUseCase;
     private readonly IImageStorageService _imageStorageService;
     private readonly SemaphoreSlim _historyLoadLock = new(1, 1);
+    private int _sessionGeneration;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ConnectAndStartCommand))]
@@ -86,22 +87,53 @@ public partial class LiveTelemetryViewModel : ObservableObject
 
     private void OnDeviceStatusChanged(DeviceStatus status)
     {
+        var generation = Volatile.Read(ref _sessionGeneration);
         System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
         {
+            if (generation != Volatile.Read(ref _sessionGeneration)) return;
             DeviceStatus = status.ToString();
             IsCapturing = status == XRaySystem.Domain.Entities.DeviceStatus.Capturing;
+            if (status == XRaySystem.Domain.Entities.DeviceStatus.Disconnected)
+            {
+                ImageStatusBadgeText = "DISCONNECTED";
+                ImageStatusBadgeColor = "#E57373";
+            }
+            else if (status == XRaySystem.Domain.Entities.DeviceStatus.Connected && !IsPaused && !IsSnapping)
+            {
+                ImageStatusBadgeText = "CONNECTED · STOPPED";
+                ImageStatusBadgeColor = "#D0B36A";
+            }
+            if (status != XRaySystem.Domain.Entities.DeviceStatus.Capturing && !IsPaused)
+                CurrentFrame = null;
         });
     }
 
     private void OnMeasurementReceived(XRayMeasurement measurement, bool displayWhilePaused = false)
     {
+        var generation = Volatile.Read(ref _sessionGeneration);
         _lastRawMeasurement = measurement;
+        var frame = measurement.Frame;
+        System.Windows.Media.Imaging.BitmapSource? displayBitmap = null;
+        if (frame is { Pixels.Length: > 0 })
+        {
+            try
+            {
+                displayBitmap = System.Windows.Media.Imaging.BitmapSource.Create(
+                    frame.Width, frame.Height, 96, 96,
+                    System.Windows.Media.PixelFormats.Gray16, null,
+                    frame.Pixels, frame.StrideBytes);
+                displayBitmap.Freeze();
+            }
+            catch { /* malformed frames are reported through state, not raw data mutation */ }
+        }
 
         // DispatcherPriority.Background: UI'ın kullanıcı etkileşimlerine öncelik vermesini sağlar
         System.Windows.Application.Current.Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Background,
             () =>
         {
+            if (generation != Volatile.Read(ref _sessionGeneration)) return;
+            if (IsPaused && !displayWhilePaused) return;
             var data = _processTelemetryUseCase.Execute(measurement);
             LatestTelemetry = data;
             
@@ -109,44 +141,11 @@ public partial class LiveTelemetryViewModel : ObservableObject
             if (TelemetryHistory.Count > 50)
                 TelemetryHistory.RemoveAt(0); 
 
-            if (data.ImageMatrix != null && data.ImageMatrix.Length > 0)
+            if (displayBitmap != null)
             {
-                try
+                if (!IsPaused || displayWhilePaused)
                 {
-                    // Genişlik/yüksekliği array boyutundan otomatik hesapla
-                    // (live: 512×512, snap: 2324×2930)
-                    int total  = data.ImageMatrix.Length;
-                    int width  = (int)Math.Sqrt(total); // kare değilse yaklaşık
-                    int height = total / width;
-
-                    // Snap görüntüsü ise tam boyutları kullan
-                    if (total == MockXRaySensorService.Width * MockXRaySensorService.Height)
-                    {
-                        width  = MockXRaySensorService.Width;
-                        height = MockXRaySensorService.Height;
-                    }
-                    else if (total == MockXRaySensorService.LiveWidth * MockXRaySensorService.LiveHeight)
-                    {
-                        width  = MockXRaySensorService.LiveWidth;
-                        height = MockXRaySensorService.LiveHeight;
-                    }
-
-                    var bitmap = System.Windows.Media.Imaging.BitmapSource.Create(
-                        width, height, 96, 96, 
-                        System.Windows.Media.PixelFormats.Gray16, 
-                        null, 
-                        data.ImageMatrix, 
-                        width * 2);
-
-                    bitmap.Freeze();
-                     if (!IsPaused || displayWhilePaused)
-                     {
-                         CurrentFrame = bitmap;
-                     }
-                }
-                catch (Exception)
-                {
-                    // Görüntü render edilemezse yoksay
+                    CurrentFrame = displayBitmap;
                 }
             }
 
@@ -158,11 +157,12 @@ public partial class LiveTelemetryViewModel : ObservableObject
     }
 
     private bool CanConnectAndStart() => !IsCapturing;
-    private bool CanStop() => IsCapturing;
+    private bool CanStop() => IsCapturing || IsSnapping;
     private bool CanDisconnect() => DeviceStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString();
-    private bool CanSnap() => DeviceStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString();
+    private bool CanSnap() => DeviceStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString() && ExposureTimeIsValid && !IsSnapping;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
     private bool _isSnapping = false;
 
     [ObservableProperty]
@@ -176,9 +176,20 @@ public partial class LiveTelemetryViewModel : ObservableObject
     /// Değiştirildiğinde otomatik olarak geçerli aralığa sıkıştırılır.
     /// </summary>
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
     [NotifyPropertyChangedFor(nameof(ExposureTimeIsValid))]
     [NotifyPropertyChangedFor(nameof(ExposureValidationMessage))]
     private double _userExposureTime = 500.0;
+
+    [ObservableProperty]
+    private AcquisitionProfile _profile = AcquisitionProfile.IndustrialQaPhantom;
+    public Array ProfileOptions => Enum.GetValues<AcquisitionProfile>();
+
+    partial void OnProfileChanged(AcquisitionProfile value)
+    {
+        if (_sensorService.CurrentStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected)
+            _sensorService.Profile = value;
+    }
 
     /// <summary>Min exposure süresi: her zaman 1ms (deteöktör sınırı)</summary>
     public double MinExposureTime => 1.0;
@@ -210,28 +221,36 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanSnap))]
     private async Task SnapAsync()
     {
+        var snapGeneration = Interlocked.Increment(ref _sessionGeneration);
         try
         {
             IsSnapping = true;
+            _sensorService.Profile = Profile;
 
             // Adım 1: Sensörden görüntü al (exposure time kadar bekler)
             var measurement = await _snapMeasurementUseCase.ExecuteAsync(UserExposureTime);
+
+            // Publish the immutable snap immediately; persistence must not affect Frozen UI.
+            IsPaused = true;
+            OnMeasurementReceived(measurement, displayWhilePaused: true);
+            ImageStatusBadgeText = $"📸 SNAP DONDURULDU ({measurement.Frame!.Width}x{measurement.Frame.Height})";
+            ImageStatusBadgeColor = "#FF9500";
 
             // Adım 2: Dosya adını oluştur (image_Voltage_Current_Exposure_Date.tiff)
             var fileName = $"image_{measurement.Readings.Voltage:F0}kV" +
                            $"_{measurement.Readings.TubeCurrent:F0}mA" +
                            $"_{measurement.Readings.ExposureTime:F0}ms" +
-                           $"_{DateTime.Now:yyyyMMdd_HHmmss}.tiff";
+                           $"_{measurement.Frame!.AcquisitionId:N}_{measurement.Frame.Timestamp:yyyyMMdd_HHmmssfff}.tiff";
 
             // Adım 3a: BitmapSource'u UI (STA) thread'de oluştur ve dondur
             var snapBitmap = System.Windows.Media.Imaging.BitmapSource.Create(
-                MockXRaySensorService.Width,
-                MockXRaySensorService.Height,
+                measurement.Frame!.Width,
+                measurement.Frame.Height,
                 96, 96,
                 System.Windows.Media.PixelFormats.Gray16,
                 null,
-                measurement.ImageMatrix!,
-                MockXRaySensorService.Width * 2);
+                measurement.Frame.Pixels,
+                 measurement.Frame.StrideBytes);
             snapBitmap.Freeze(); // Dondurulmuş bitmap her thread'den erişilebilir
 
             // Adım 3b: TIFF dosyasını background thread'de kaydet (yalnızca dosya I/O)
@@ -242,14 +261,10 @@ public partial class LiveTelemetryViewModel : ObservableObject
             measurement.SetImagePath(imagePath);
 
             // Adım 5: Veritabanına kaydet (Repository Use Case kullanarak)
+            await App.DatabaseReady;
             await _saveMeasurementUseCase.ExecuteAsync(measurement);
 
-            // Adım 6: UI'ı güncelle – görüntüyü göster ve History'e ekle
-            IsPaused = true;
-            OnMeasurementReceived(measurement, displayWhilePaused: true);
-
-            ImageStatusBadgeText  = $"📸 SNAP DONDURULDU ({MockXRaySensorService.Width}x{MockXRaySensorService.Height} TIFF - {Path.GetFileName(imagePath)})";
-            ImageStatusBadgeColor = "#FF9500";
+            ImageStatusBadgeText = $"📸 SNAP DONDURULDU ({measurement.Frame.Width}x{measurement.Frame.Height} TIFF - {Path.GetFileName(imagePath)})";
 
             var dto = new SensorDataDto
             {
@@ -259,6 +274,8 @@ public partial class LiveTelemetryViewModel : ObservableObject
                 Voltage = measurement.Readings.Voltage,
                 XRayIntensity = measurement.Readings.XRayIntensity,
                 ExposureTime = measurement.Readings.ExposureTime,
+                Profile = measurement.Profile,
+                IsSimulator = measurement.IsSimulator,
                 ImagePath = imagePath
             };
 
@@ -267,6 +284,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            // The captured frame remains visible even when TIFF/DB readiness or persistence fails.
             System.Windows.MessageBox.Show(ex.Message, "Snap Hatası");
         }
         finally
@@ -278,6 +296,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [RelayCommand]
     private void LoadFromHistory(SensorDataDto? item)
     {
+        Interlocked.Increment(ref _sessionGeneration);
         if (item?.ImagePath == null || !File.Exists(item.ImagePath))
         {
             System.Windows.MessageBox.Show("Görüntü dosyası bulunamadı.", "Hata");
@@ -299,6 +318,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [RelayCommand]
     private async Task ResumeLiveAsync()
     {
+        Interlocked.Increment(ref _sessionGeneration);
         IsPaused = false;
         ImageStatusBadgeText  = "🔴 CANLI YAYIN (512x512 Preview - Akış Aktif)";
         ImageStatusBadgeColor = "#34C759";
@@ -326,12 +346,14 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStop))]
     private async Task StopAsync()
     {
+        Interlocked.Increment(ref _sessionGeneration);
         await _sensorService.StopCaptureAsync();
     }
     
     [RelayCommand(CanExecute = nameof(CanDisconnect))]
     private async Task DisconnectAsync()
     {
+        Interlocked.Increment(ref _sessionGeneration);
         await _sensorService.DisconnectAsync();
     }
 
@@ -352,10 +374,13 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [RelayCommand]
     private async Task RefreshHistoryAsync()
     {
+        var generation = Interlocked.Increment(ref _sessionGeneration);
         await _historyLoadLock.WaitAsync();
         try
         {
+            await App.DatabaseReady;
             var history = await _getHistoryUseCase.ExecuteAsync();
+            if (generation != Volatile.Read(ref _sessionGeneration)) return;
             
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {

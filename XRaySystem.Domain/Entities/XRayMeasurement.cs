@@ -13,17 +13,22 @@ public class XRayMeasurement
     public string? ImagePath { get; private set; }
 
     // Sensörden gelen ham görüntü verisi (Veritabanına kaydedilmez – DbContext'te Ignore() ile hariç tutulur)
-    public ushort[]? ImageMatrix { get; private set; } 
+    public ushort[]? ImageMatrix => Frame?.Pixels; // compatibility-only alias; use Frame.Pixels
+    public RawGray16Frame? Frame { get; private set; }
+    public AcquisitionProfile Profile { get; private set; }
+    public bool IsSimulator { get; private set; }
 
     // EF Core için parametresiz kurucu
-    protected XRayMeasurement() { }
+    protected XRayMeasurement() { Profile = AcquisitionProfile.IndustrialQaPhantom; }
 
-    public XRayMeasurement(SensorReadings readings, ushort[] imageMatrix)
+    public XRayMeasurement(SensorReadings readings, RawGray16Frame frame, bool isSimulator = false)
     {
         Id = Guid.NewGuid();
         Timestamp = DateTime.UtcNow;
         Readings = readings;
-        ImageMatrix = imageMatrix;
+        Frame = frame;
+        Profile = frame.Settings.Profile;
+        IsSimulator = isSimulator;
     }
 
     public void SetImagePath(string path)

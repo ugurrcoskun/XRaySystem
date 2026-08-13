@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Threading.Tasks;
 using XRaySystem.Application.DTOs;
 using XRaySystem.Domain.Interfaces;
@@ -14,8 +15,8 @@ public class SnapMeasurementUseCase
         _sensorService = sensorService;
     }
 
-    public async Task<XRayMeasurement> ExecuteAsync(double exposureTime)
+    public async Task<XRayMeasurement> ExecuteAsync(double exposureTime, CancellationToken cancellationToken = default)
     {
-        return await _sensorService.SnapAsync(exposureTime);
+        return await _sensorService.SnapAsync(exposureTime, cancellationToken);
     }
 }

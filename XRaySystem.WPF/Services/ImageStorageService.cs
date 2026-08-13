@@ -39,6 +39,8 @@ public class ImageStorageService : IImageStorageService
             throw new InvalidOperationException("BitmapSource Freeze() edilmeden kaydedilemez.");
 
         var fullPath = Path.Combine(_baseFolder, fileName);
+        if (File.Exists(fullPath))
+            fullPath = Path.Combine(_baseFolder, $"{Path.GetFileNameWithoutExtension(fileName)}_{Guid.NewGuid():N}{Path.GetExtension(fileName)}");
 
         // TIFF Encoder – sıkıştırmasız, kayıpsız
         var encoder = new TiffBitmapEncoder { Compression = TiffCompressOption.None };

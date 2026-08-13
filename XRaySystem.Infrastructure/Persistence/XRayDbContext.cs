@@ -28,5 +28,6 @@ public class XRayDbContext : DbContext
 
         // ImageMatrix ham veri - DB'ye kaydedilmez (dosya yolunu ImagePath'te tutuyoruz)
         modelBuilder.Entity<XRayMeasurement>().Ignore(x => x.ImageMatrix);
+        modelBuilder.Entity<XRayMeasurement>().Ignore(x => x.Frame);
     }
 }

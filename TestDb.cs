@@ -20,7 +20,9 @@ class Program {
         var repo = scope.ServiceProvider.GetRequiredService<IXRayMeasurementRepository>();
         
         try {
-        var m = new XRayMeasurement(new SensorReadings(1,2,3,4), new ushort[2324 * 2930]);
+        var f = new RawGray16Frame(new ushort[4], 2, 2, 4, Gray16PixelFormat.Gray16LittleEndian,
+            FrameKind.Snap, DateTimeOffset.UtcNow, Guid.NewGuid(), new AcquisitionSettings(1, 2, 4, AcquisitionProfile.IndustrialQaPhantom), "test");
+        var m = new XRayMeasurement(new SensorReadings(1,2,3,4), f);
             await repo.SaveAsync(m);
             Console.WriteLine("SUCCESS");
         } catch (Exception ex) {

@@ -20,7 +20,9 @@ public class ProcessTelemetryUseCase
             Voltage = measurement.Readings.Voltage,
             XRayIntensity = measurement.Readings.XRayIntensity,
             ExposureTime = measurement.Readings.ExposureTime,
-            ImageMatrix = measurement.ImageMatrix ?? Array.Empty<ushort>(),
+            Frame = measurement.Frame,
+            Profile = measurement.Profile,
+            IsSimulator = measurement.IsSimulator,
             ImagePath = measurement.ImagePath
         };
     }

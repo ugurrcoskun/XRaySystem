@@ -1,6 +1,8 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using XRaySystem.Domain.Entities;
+using XRaySystem.Domain.ValueObjects;
 
 namespace XRaySystem.Domain.Interfaces;
 
@@ -13,11 +15,12 @@ public interface ISensorService
     
     // Yeni bir veri okunduğunda fırlatılacak olay
     event Action<XRayMeasurement>? MeasurementReceived;
+    AcquisitionProfile Profile { get; set; }
 
     Task ConnectAsync();
     Task DisconnectAsync();
     Task StartCaptureAsync();
     Task StopCaptureAsync();
-    Task<XRayMeasurement> SnapAsync(double exposureTime);
+    Task<XRayMeasurement> SnapAsync(double exposureTime, CancellationToken cancellationToken = default);
     Task ResumeLiveAsync();
 }
