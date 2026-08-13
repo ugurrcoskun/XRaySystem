@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="XRaySystem.Application/XRaySystem.Application.csproj" />
+  <Project Path="XRaySystem.Domain/XRaySystem.Domain.csproj" />
+  <Project Path="XRaySystem.Infrastructure/XRaySystem.Infrastructure.csproj" />
+  <Project Path="XRaySystem.WPF/XRaySystem.WPF.csproj" />
+</Solution>

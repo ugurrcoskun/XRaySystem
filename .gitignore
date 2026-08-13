@@ -1,0 +1,29 @@
+# Build output
+**/bin/
+**/obj/
+
+# Visual Studio / Rider / user state
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+# Generated local/runtime data
+*.db
+*.db-shm
+*.db-wal
+*.log
+TestResults/
+*.trx
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local image captures (source assets under Assets remain tracked)
+XRaySystem.WPF/Images/
+Images/
+Docs/
+plan.md
+project.md

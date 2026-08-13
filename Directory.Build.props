@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <MSBuildProjectExtensionsPath>$(LocalAppData)\XRaySystem\$(MSBuildProjectName)\obj\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>
