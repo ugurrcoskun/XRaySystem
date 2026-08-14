@@ -9,6 +9,7 @@ using XRaySystem.Domain.Interfaces;
 using XRaySystem.Infrastructure.Cloud;
 using XRaySystem.Infrastructure.Persistence;
 using XRaySystem.Infrastructure.Sensors;
+using System.Runtime.InteropServices;
 using XRaySystem.WPF.Services;
 using XRaySystem.WPF.ViewModels;
 
@@ -104,9 +105,19 @@ namespace XRaySystem.WPF
 
             // Image Storage (WPF projesinde çünkü WPF tiplerini kullanıyor)
             services.AddSingleton<IImageStorageService, ImageStorageService>();
+            services.AddSingleton<WindowLevelRenderer>();
 
-            // Domain & Infrastructure Servisleri (Singletons)
-            services.AddSingleton<ISensorService, MockXRaySensorService>();
+            // ── Sensör Modu Seçimi ────────────────────────────────────────────────
+            // SENSOR_MODE ortam değişkeniyle veya aşağıdaki satırı değiştirerek seçebilirsin:
+            //   Mock  → sentetik piksel üretir (varsayılan, donanım/veri gerektirmez)
+            //   Disk  → Tools/DicomConverter/dicom_to_raw.py ile oluşturulan gerçek DICOM verisi
+            // Örnek:  SENSOR_MODE=Disk dotnet run
+            var sensorMode = Environment.GetEnvironmentVariable("SENSOR_MODE") ?? "Mock";
+            if (sensorMode.Equals("Disk", StringComparison.OrdinalIgnoreCase))
+                services.AddSingleton<ISensorService, DiskImageSensorService>();
+            else
+                services.AddSingleton<ISensorService, MockXRaySensorService>();
+
             services.AddSingleton<ICloudPublisher, NullCloudPublisher>();
 
             // Application (Use Cases)

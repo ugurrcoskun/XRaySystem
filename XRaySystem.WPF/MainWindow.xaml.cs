@@ -18,8 +18,14 @@ namespace XRaySystem.WPF
             DataContext = viewModel;
 
             Loaded += MainWindow_Loaded;
+            Closed += MainWindow_Closed;
             SizeChanged += MainWindow_SizeChanged;
             viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        }
+
+        private void MainWindow_Closed(object? sender, EventArgs e)
+        {
+            if (DataContext is LiveTelemetryViewModel vm) vm.InvalidateWindowLevelRendering();
         }
 
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -213,21 +219,7 @@ namespace XRaySystem.WPF
 
             try
             {
-                // TIFF dosyasını MemoryStream üzerinden yükle (path encoding sorunlarını önler)
-                byte[] fileBytes = System.IO.File.ReadAllBytes(item.ImagePath);
-                using var ms = new System.IO.MemoryStream(fileBytes);
-
-                var decoder = new System.Windows.Media.Imaging.TiffBitmapDecoder(
-                    ms,
-                    System.Windows.Media.Imaging.BitmapCreateOptions.PreservePixelFormat,
-                    System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
-
-                var frame = decoder.Frames[0];
-                frame.Freeze();
-
-                // CurrentFrame'i güncelle, live yayını duraklat ve rozeti güncelle
-                vm.IsPaused              = true;
-                vm.CurrentFrame          = frame;
+                vm.LoadHistoryTiff(item.ImagePath, item);
                 vm.ImageStatusBadgeText  = $"📁 GEÇMİŞ İNCELEME: {System.IO.Path.GetFileName(item.ImagePath)} ({item.Timestamp:yyyy-MM-dd HH:mm:ss})";
                 vm.ImageStatusBadgeColor = "#00F0FF";
                 ResetImageView();

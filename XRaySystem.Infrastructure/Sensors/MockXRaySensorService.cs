@@ -12,6 +12,7 @@ public class MockXRaySensorService : ISensorService, IDisposable
     private DeviceStatus _currentStatus = DeviceStatus.Disconnected;
     private CancellationTokenSource? _captureTokenSource;
     private Task? _producerTask;
+    private Task? _producerStopTask;
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _snapLock = new(1, 1);
     private CancellationTokenSource _sessionCancellation = new();
@@ -20,10 +21,18 @@ public class MockXRaySensorService : ISensorService, IDisposable
     private TaskCompletionSource<bool> _allSnapsCompletion = CompletedTaskSource();
     private readonly Random _random = new();
     private volatile bool _disconnectRequested;
+    private int _stopTransitionCount;
     private readonly object _disposeSync = new();
     private bool _disposeRequested;
     private bool _disposed;
     private int _activeSnapCount;
+    private int _producerGeneration;
+    private int _operationEpoch;
+    private Task? _disconnectTask;
+    private int _activeLifecycleOperations;
+    private TaskCompletionSource<bool>? _lifecycleOperationsCompleted;
+
+    private bool IsStopTransitionRequested => Volatile.Read(ref _stopTransitionCount) != 0;
 
     private static TaskCompletionSource<bool> CompletedTaskSource()
     {
@@ -59,67 +68,114 @@ public class MockXRaySensorService : ISensorService, IDisposable
 
     public async Task ConnectAsync()
     {
-        await _lifecycleLock.WaitAsync();
+        var lifecycle = await EnterLifecycleAsync().ConfigureAwait(false);
         try
         {
             if (CurrentStatus != DeviceStatus.Disconnected) return;
-            await Task.Delay(500);
+            await Task.Delay(500).ConfigureAwait(false);
+            lock (_disposeSync)
+            {
+                if (_disposeRequested || _disposed)
+                    throw new ObjectDisposedException(nameof(MockXRaySensorService));
+                // A completed disconnect belongs to the old session. Keep a
+                // new connection able to create its own disconnect operation.
+                if (_disconnectTask is { IsCompleted: true })
+                    _disconnectTask = null;
+            }
             _disconnectRequested = false;
             _sessionCancellation.Dispose();
             _sessionCancellation = new CancellationTokenSource();
             CurrentStatus = DeviceStatus.Connected;
         }
-        finally { _lifecycleLock.Release(); }
+        finally { lifecycle.Release(); }
     }
 
     public async Task DisconnectAsync()
     {
+        Task disconnectTask;
         lock (_disposeSync)
-            if (_disposeRequested || _disposed) return;
-        _disconnectRequested = true;
-        _snapCancellation?.Cancel();
-        await _lifecycleLock.WaitAsync();
+        {
+            if (_disconnectTask != null)
+            {
+                disconnectTask = _disconnectTask;
+            }
+            else if (_disposed)
+            {
+                return;
+            }
+            else
+            {
+                _disconnectRequested = true;
+                Interlocked.Increment(ref _operationEpoch);
+                disconnectTask = DisconnectCoreAsync(allowDispose: false);
+                _disconnectTask = disconnectTask;
+            }
+        }
+
+        await disconnectTask.ConfigureAwait(false);
+    }
+
+    private async Task DisconnectCoreAsync(bool allowDispose)
+    {
+        var lifecycle = await EnterLifecycleAsync(allowDispose: allowDispose).ConfigureAwait(false);
         Task snapCompletion;
         try
         {
             _sessionCancellation.Cancel();
+            CancelSnapUnderLock();
             if (CurrentStatus != DeviceStatus.Disconnected)
             {
-                await StopProducerUnderLockAsync();
+                var producerStop = StopProducerUnderLock();
+                lifecycle.Release();
+                await producerStop.ConfigureAwait(false);
+                // Dispose may be requested while the producer is stopping, but
+                // that must not invalidate this already-admitted transition.
+                lifecycle = await EnterLifecycleAsync(allowDispose: true).ConfigureAwait(false);
                 CurrentStatus = DeviceStatus.Disconnected;
             }
+            // Do not dispose any synchronization primitive until every Snap has
+            // completed its finally block and released _snapLock.
             snapCompletion = _allSnapsCompletion.Task;
         }
-        finally { _lifecycleLock.Release(); }
+        finally { lifecycle.Release(); }
 
-        await snapCompletion;
+        await snapCompletion.ConfigureAwait(false);
     }
 
     public async Task StartCaptureAsync()
     {
-        if (CurrentStatus != DeviceStatus.Connected && CurrentStatus != DeviceStatus.Frozen)
-        {
-            throw new InvalidOperationException("Cihaz bağlı değil. Önce ConnectAsync çağrılmalıdır.");
-        }
-
-        await _lifecycleLock.WaitAsync();
+        var lifecycle = await EnterLifecycleAsync().ConfigureAwait(false);
         try
         {
+            if (CurrentStatus != DeviceStatus.Connected && CurrentStatus != DeviceStatus.Frozen)
+                throw new InvalidOperationException("Cihaz bağlı değil. Önce ConnectAsync çağrılmalıdır.");
+            if (_producerStopTask is { IsCompleted: false }) return;
             if (_producerTask is { IsCompleted: false }) return;
             _sessionCancellation.Dispose();
             _sessionCancellation = new CancellationTokenSource();
             _captureTokenSource?.Dispose();
             _captureTokenSource = new CancellationTokenSource();
             CurrentStatus = DeviceStatus.Capturing;
-            _producerTask = GenerateMockDataLoopAsync(_captureTokenSource.Token);
+            var generation = ++_producerGeneration;
+            _producerTask = GenerateMockDataLoopAsync(_captureTokenSource.Token, generation);
         }
-        finally { _lifecycleLock.Release(); }
+        finally { lifecycle.Release(); }
     }
 
     public async Task StopCaptureAsync()
     {
-        _snapCancellation?.Cancel();
-        await _lifecycleLock.WaitAsync();
+        Interlocked.Increment(ref _stopTransitionCount);
+        Interlocked.Increment(ref _operationEpoch);
+        LifecycleLease lifecycle;
+        try
+        {
+            lifecycle = await EnterLifecycleAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            Interlocked.Decrement(ref _stopTransitionCount);
+            throw;
+        }
         Task snapCompletion;
         try
         {
@@ -129,12 +185,20 @@ public class MockXRaySensorService : ISensorService, IDisposable
                 goto AwaitSnap;
             }
             _sessionCancellation.Cancel();
-            await StopProducerUnderLockAsync();
+            CancelSnapUnderLock();
+            var producerStop = StopProducerUnderLock();
+            lifecycle.Release();
+            await producerStop.ConfigureAwait(false);
+            lifecycle = await EnterLifecycleAsync().ConfigureAwait(false);
             if (CurrentStatus != DeviceStatus.Snapping && CurrentStatus != DeviceStatus.Frozen)
                 CurrentStatus = DeviceStatus.Connected;
             snapCompletion = _allSnapsCompletion.Task;
         }
-        finally { _lifecycleLock.Release(); }
+        finally
+        {
+            lifecycle.Release();
+            Interlocked.Decrement(ref _stopTransitionCount);
+        }
 
     AwaitSnap:
         await snapCompletion;
@@ -144,44 +208,57 @@ public class MockXRaySensorService : ISensorService, IDisposable
     {
         if (!double.IsFinite(exposureTime) || exposureTime < 1 || exposureTime > 3000)
             throw new ArgumentOutOfRangeException(nameof(exposureTime));
-        await _lifecycleLock.WaitAsync();
+        var lifecycle = await EnterLifecycleAsync(cancellationToken).ConfigureAwait(false);
+        var snapGeneration = 0;
+        var snapRegistered = false;
         try
         {
             lock (_disposeSync)
                 if (_disposeRequested || _disposed) throw new ObjectDisposedException(nameof(MockXRaySensorService));
-            if (_disconnectRequested || CurrentStatus == DeviceStatus.Disconnected)
+            if (_disconnectRequested || IsStopTransitionRequested || CurrentStatus == DeviceStatus.Disconnected)
                 throw new InvalidOperationException("Cihaz bağlı değil.");
+            snapGeneration = _operationEpoch;
             if (_activeSnapCount++ == 0)
                 _allSnapsCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            snapRegistered = true;
         }
-        finally { _lifecycleLock.Release(); }
+        finally { lifecycle.Release(); }
 
         var snapLockAcquired = false;
         TaskCompletionSource<bool>? snapCompletion = null;
         CancellationTokenSource? snapCancellation = null;
-        var lifecycleLockHeld = false;
+        LifecycleLease? snapLifecycle = null;
         try
         {
-            await _snapLock.WaitAsync(cancellationToken);
+            await _snapLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // WaitAsync may throw before acquisition. Set this only after it
+            // has returned successfully so cancellation cannot over-release.
             snapLockAcquired = true;
-            await _lifecycleLock.WaitAsync(cancellationToken);
-            lifecycleLockHeld = true;
-            if (_disconnectRequested || CurrentStatus == DeviceStatus.Disconnected || CurrentStatus == DeviceStatus.Snapping)
+            snapLifecycle = await EnterLifecycleAsync(cancellationToken).ConfigureAwait(false);
+            if (_disconnectRequested || IsStopTransitionRequested || CurrentStatus == DeviceStatus.Disconnected ||
+                CurrentStatus == DeviceStatus.Snapping || snapGeneration != _operationEpoch)
                 throw new InvalidOperationException("Cihaz bağlı değil.");
             CurrentStatus = DeviceStatus.Snapping;
             _sessionCancellation.Cancel();
-            await StopProducerUnderLockAsync();
+            var producerStop = StopProducerUnderLock();
+            snapLifecycle!.Release();
+            snapLifecycle = null;
+            await producerStop.ConfigureAwait(false);
+            snapLifecycle = await EnterLifecycleAsync(cancellationToken).ConfigureAwait(false);
+            if (_disconnectRequested || IsStopTransitionRequested || CurrentStatus == DeviceStatus.Disconnected ||
+                snapGeneration != _operationEpoch)
+                throw new OperationCanceledException("Snap was stopped by a lifecycle transition.");
             _sessionCancellation.Dispose();
             _sessionCancellation = new CancellationTokenSource();
             snapCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _sessionCancellation.Token);
             _snapCancellation = snapCancellation;
             snapCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             _snapCompletion = snapCompletion;
-            _lifecycleLock.Release();
-            lifecycleLockHeld = false;
+            snapLifecycle!.Release();
+            snapLifecycle = null;
 
             // Snap işlemi (donanımın exposure süresi kadar beklemesi simülasyonu)
-            await Task.Delay((int)exposureTime, snapCancellation.Token);
+            await Task.Delay((int)exposureTime, snapCancellation.Token).ConfigureAwait(false);
 
             var readings = new SensorReadings(
             TubeCurrent: Math.Round(50.0 + _random.NextDouble() * 5, 2), // Snap'te daha yüksek akım
@@ -202,33 +279,38 @@ public class MockXRaySensorService : ISensorService, IDisposable
         finally
         {
             _isPaused = false;
-            if (lifecycleLockHeld)
-                _lifecycleLock.Release();
-            await _lifecycleLock.WaitAsync();
-            try
+            snapLifecycle?.Release();
+            if (snapRegistered)
             {
-                if (CurrentStatus == DeviceStatus.Snapping && !_disconnectRequested)
-                    CurrentStatus = DeviceStatus.Connected;
-                if (ReferenceEquals(_snapCancellation, snapCancellation))
-                    _snapCancellation = null;
-                if (ReferenceEquals(_snapCompletion, snapCompletion))
+                var cleanupLifecycle = await EnterLifecycleAsync(allowDispose: true).ConfigureAwait(false);
+                try
                 {
-                    _snapCompletion = null;
-                    snapCompletion?.TrySetResult(true);
+                    if (CurrentStatus == DeviceStatus.Snapping && !_disconnectRequested)
+                        CurrentStatus = DeviceStatus.Connected;
+                    if (ReferenceEquals(_snapCancellation, snapCancellation))
+                        _snapCancellation = null;
+                    if (ReferenceEquals(_snapCompletion, snapCompletion))
+                    {
+                        _snapCompletion = null;
+                        snapCompletion?.TrySetResult(true);
+                    }
                 }
+                finally { cleanupLifecycle.Release(); }
             }
-            finally { _lifecycleLock.Release(); }
-            snapCancellation?.Dispose();
             if (snapLockAcquired)
                 _snapLock.Release();
+            snapCancellation?.Dispose();
 
-            await _lifecycleLock.WaitAsync();
-            try
+            if (snapRegistered)
             {
-                if (--_activeSnapCount == 0)
-                    _allSnapsCompletion.TrySetResult(true);
+                var countLifecycle = await EnterLifecycleAsync(allowDispose: true).ConfigureAwait(false);
+                try
+                {
+                    if (--_activeSnapCount == 0)
+                        _allSnapsCompletion.TrySetResult(true);
+                }
+                finally { countLifecycle.Release(); }
             }
-            finally { _lifecycleLock.Release(); }
         }
     }
 
@@ -241,21 +323,96 @@ public class MockXRaySensorService : ISensorService, IDisposable
 
     private bool _isPaused = false;
 
-    private async Task StopProducerUnderLockAsync()
+    private async Task<LifecycleLease> EnterLifecycleAsync(CancellationToken cancellationToken = default, bool allowDispose = false)
     {
-        _captureTokenSource?.Cancel();
-        var producer = _producerTask;
-        if (producer != null)
+        lock (_disposeSync)
         {
-            try { await producer; } catch (OperationCanceledException) { }
+            if (!allowDispose && (_disposeRequested || _disposed))
+                throw new ObjectDisposedException(nameof(MockXRaySensorService));
+            ++_activeLifecycleOperations;
         }
-        _producerTask = null;
-        _captureTokenSource?.Dispose();
-        _captureTokenSource = null;
+
+        try
+        {
+            await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return new LifecycleLease(this);
+        }
+        catch
+        {
+            CompleteLifecycleOperation();
+            throw;
+        }
     }
 
-    private async Task GenerateMockDataLoopAsync(CancellationToken token)
+    private void ReleaseLifecycle()
     {
+        _lifecycleLock.Release();
+        CompleteLifecycleOperation();
+    }
+
+    private void CompleteLifecycleOperation()
+    {
+        lock (_disposeSync)
+        {
+            if (--_activeLifecycleOperations == 0)
+                _lifecycleOperationsCompleted?.TrySetResult(true);
+        }
+    }
+
+    private sealed class LifecycleLease
+    {
+        private readonly MockXRaySensorService _owner;
+        private int _released;
+
+        public LifecycleLease(MockXRaySensorService owner) => _owner = owner;
+
+        public void Release()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                _owner.ReleaseLifecycle();
+        }
+    }
+
+    private void CancelSnapUnderLock()
+    {
+        // The lifecycle lock is the sole owner of the current snap CTS.  A
+        // caller captures it here, before SnapAsync can clear and dispose it.
+        _snapCancellation?.Cancel();
+    }
+
+    private Task StopProducerUnderLock()
+    {
+        if (_producerStopTask is { IsCompleted: false })
+            return _producerStopTask;
+
+        var producer = _producerTask;
+        var captureTokenSource = _captureTokenSource;
+        _producerTask = null;
+        _captureTokenSource = null;
+        ++_producerGeneration;
+        if (captureTokenSource == null)
+            return _producerStopTask = producer == null ? Task.CompletedTask : AwaitProducerAsync(producer, null);
+
+        captureTokenSource.Cancel();
+        return _producerStopTask = AwaitProducerAsync(producer, captureTokenSource);
+    }
+
+    private static async Task AwaitProducerAsync(Task? producer, CancellationTokenSource? captureTokenSource)
+    {
+        try
+        {
+            if (producer != null)
+                try { await producer.ConfigureAwait(false); } catch (OperationCanceledException) { }
+        }
+        finally
+        {
+            captureTokenSource?.Dispose();
+        }
+    }
+
+    private async Task GenerateMockDataLoopAsync(CancellationToken token, int generation)
+    {
+        _ = generation;
         try
         {
             while (!token.IsCancellationRequested)
@@ -362,11 +519,42 @@ public class MockXRaySensorService : ISensorService, IDisposable
 
     public void Dispose()
     {
-        StopCaptureAsync().GetAwaiter().GetResult();
-        _captureTokenSource?.Dispose();
-        _sessionCancellation.Cancel();
-        _sessionCancellation.Dispose();
-        _snapLock.Dispose();
-        _lifecycleLock.Dispose();
+        Task disconnectTask;
+        lock (_disposeSync)
+        {
+            if (_disposed) return;
+
+            _disposeRequested = true;
+            if (_disconnectTask == null)
+            {
+                _disconnectRequested = true;
+                _disconnectTask = DisconnectCoreAsync(allowDispose: true);
+            }
+            disconnectTask = _disconnectTask;
+        }
+
+        // DisconnectCoreAsync cancels and awaits all active Snaps before this
+        // method disposes the primitives they use in their finally blocks.
+        disconnectTask.GetAwaiter().GetResult();
+
+        Task lifecycleOperations;
+        lock (_disposeSync)
+        {
+            lifecycleOperations = _activeLifecycleOperations == 0
+                ? Task.CompletedTask
+                : (_lifecycleOperationsCompleted ??= new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+        }
+        lifecycleOperations.GetAwaiter().GetResult();
+
+        lock (_disposeSync)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _captureTokenSource?.Dispose();
+            _sessionCancellation.Dispose();
+            _snapLock.Dispose();
+            _lifecycleLock.Dispose();
+        }
     }
 }

@@ -1,0 +1,47 @@
+{
+  "version": 2,
+  "raw_representation": "uint16-little-endian",
+  "normalization_policy": "display-normalized-uint16",
+  "normalization_policy_version": 1,
+  "physical_calibration_in_raw": false,
+  "snap_width": 2304,
+  "snap_height": 2930,
+  "live_width": 512,
+  "live_height": 512,
+  "images": [
+    {
+      "stem": "CT1_IMP",
+      "entry_id": "CT1_IMP",
+      "snap_file": "CT1_IMP_snap_2304x2930.raw",
+      "live_file": "CT1_IMP_live_512x512.raw",
+      "snap_width": 2304,
+      "snap_height": 2930,
+      "live_width": 512,
+      "live_height": 512,
+      "modality": "CT",
+      "kvp": "120",
+      "exposure_time": "1601",
+      "tube_current": "170",
+      "source_file": "CT1_IMP.dcm"
+      ,"rescale_slope": 1.0,
+      "rescale_intercept": 0.0,
+      "normalization_policy": "display-normalized-uint16",
+      "normalization_policy_version": 1
+    },
+    {
+      "stem": "CT1_LE",
+      "entry_id": "CT1_LE",
+      "snap_file": "CT1_LE_snap_2304x2930.raw",
+      "live_file": "CT1_LE_live_512x512.raw",
+      "snap_width": 2304,
+      "snap_height": 2930,
+      "live_width": 512,
+      "live_height": 512,
+      "modality": "CT",
+      "rescale_slope": 1.0,
+      "rescale_intercept": 0.0,
+      "normalization_policy": "display-normalized-uint16",
+      "normalization_policy_version": 1
+    }
+  ]
+}

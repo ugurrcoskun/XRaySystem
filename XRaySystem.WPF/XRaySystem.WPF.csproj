@@ -20,6 +20,15 @@
     </Content>
   </ItemGroup>
 
+  <!-- Gerçek DICOM verilerini (.raw) build çıktısına kopyala -->
+  <!-- DiskImageSensorService AppContext.BaseDirectory\SampleData\ yolunu otomatik bulur -->
+  <ItemGroup>
+    <Content Include="..\XRaySystem.Infrastructure\SampleData\**">
+      <Link>SampleData\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\XRaySystem.Application\XRaySystem.Application.csproj" />
     <ProjectReference Include="..\XRaySystem.Infrastructure\XRaySystem.Infrastructure.csproj" />
