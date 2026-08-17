@@ -18,14 +18,23 @@ namespace XRaySystem.WPF
             DataContext = viewModel;
 
             Loaded += MainWindow_Loaded;
-            Closed += MainWindow_Closed;
+            Closed += Window_Closed;
             SizeChanged += MainWindow_SizeChanged;
             viewModel.PropertyChanged += ViewModel_PropertyChanged;
         }
 
-        private void MainWindow_Closed(object? sender, EventArgs e)
+        private void Window_Closed(object? sender, EventArgs e)
         {
             if (DataContext is LiveTelemetryViewModel vm) vm.InvalidateWindowLevelRendering();
+        }
+
+        private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.OriginalSource is not System.Windows.Controls.TextBox &&
+                e.OriginalSource is not System.Windows.Controls.Primitives.TextBoxBase)
+            {
+                RootGrid.Focus();
+            }
         }
 
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)

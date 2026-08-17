@@ -292,14 +292,43 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private bool _isPaused = false;
 
     /// <summary>
+    /// Kullanıcının girdiği tüp voltajı (kV).
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MaxExposureTime))]
+    [NotifyPropertyChangedFor(nameof(ExposureTimeIsValid))]
+    [NotifyPropertyChangedFor(nameof(ExposureValidationMessage))]
+    private double _userVoltage = 70.0;
+
+    /// <summary>
+    /// Kullanıcının girdiği tüp akımı (mA).
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MaxExposureTime))]
+    [NotifyPropertyChangedFor(nameof(ExposureTimeIsValid))]
+    [NotifyPropertyChangedFor(nameof(ExposureValidationMessage))]
+    private double _userTubeCurrent = 50.0;
+
+    /// <summary>
     /// Kullanıcının girdiği exposure süresi (ms).
-    /// Değiştirildiğinde otomatik olarak geçerli aralığa sıkıştırılır.
     /// </summary>
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
     [NotifyPropertyChangedFor(nameof(ExposureTimeIsValid))]
     [NotifyPropertyChangedFor(nameof(ExposureValidationMessage))]
     private double _userExposureTime = 500.0;
+
+    partial void OnUserVoltageChanged(double value)
+    {
+        if (_sensorService is XRaySystem.Infrastructure.Sensors.MockXRaySensorService mock)
+            mock.TargetVoltage = value;
+    }
+
+    partial void OnUserTubeCurrentChanged(double value)
+    {
+        if (_sensorService is XRaySystem.Infrastructure.Sensors.MockXRaySensorService mock)
+            mock.TargetTubeCurrent = value;
+    }
 
     [ObservableProperty]
     private AcquisitionProfile _profile = AcquisitionProfile.IndustrialQaPhantom;
@@ -311,12 +340,11 @@ public partial class LiveTelemetryViewModel : ObservableObject
             _sensorService.Profile = value;
     }
 
-    /// <summary>Min exposure süresi: her zaman 1ms (deteöktör sınırı)</summary>
+    /// <summary>Min exposure süresi: her zaman 1ms (dedektör sınırı)</summary>
     public double MinExposureTime => 1.0;
 
     /// <summary>
-    /// Max exposure süresi: kV ve mA'ya bağlı hesaplanır.
-    /// yüksek kV = daha az süre gerekli, yüksek mA = daha az süre gerekli.
+    /// Max exposure süresi: Kullanıcı girdiği kV ve mA'ya bağlı hesaplanır.
     /// Formül: MaxmAs = 150 - (kV - 40) * 0.8  (kV arttıkça mAs payı azalır)
     ///          MaxExposure = MaxmAs / mA * 1000
     ///          [1ms, 3000ms] arasında sınırlandırılır.
@@ -325,8 +353,8 @@ public partial class LiveTelemetryViewModel : ObservableObject
     {
         get
         {
-            double kv  = LatestTelemetry?.Voltage     ?? 70.0;
-            double mA  = LatestTelemetry?.TubeCurrent ?? 50.0;
+            double kv  = UserVoltage > 0 ? UserVoltage : 70.0;
+            double mA  = UserTubeCurrent > 0 ? UserTubeCurrent : 50.0;
             double maxMAs = Math.Max(10, 150.0 - (kv - 40.0) * 0.8);
             double maxMs  = (maxMAs / mA) * 1000.0;
             return Math.Clamp(maxMs, 1.0, 3000.0);

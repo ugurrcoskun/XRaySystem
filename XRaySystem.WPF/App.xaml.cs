@@ -43,10 +43,11 @@ namespace XRaySystem.WPF
                 ServiceProvider = serviceCollection.BuildServiceProvider();
 
                 // Veritabanını senkron olarak oluştur (Açılışta tabloların 100% hazır olmasını sağla)
+                InitializeDatabase();
+
                 // Dependency Injection üzerinden ana pencereyi ayağa kaldır
                 var mainWindow = ServiceProvider.GetRequiredService<MainWindow>();
                 mainWindow.Show();
-                DatabaseReady = InitializeDatabaseAsync();
             }
             catch (System.Exception ex)
             {
@@ -54,22 +55,19 @@ namespace XRaySystem.WPF
             }
         }
 
-        private async Task InitializeDatabaseAsync()
+        private static void InitializeDatabase()
         {
             try
             {
-                await Task.Run(() =>
-                {
-                    using var scope = ServiceProvider.CreateScope();
-                    var db = scope.ServiceProvider.GetRequiredService<XRayDbContext>();
-                    db.Database.EnsureCreated();
-                    UpgradeSchema(db);
-                });
+                using var scope = ServiceProvider.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<XRayDbContext>();
+                db.Database.EnsureCreated();
+                UpgradeSchema(db);
             }
             catch (Exception ex)
             {
                 DatabaseInitializationFailure = ex;
-                Dispatcher.BeginInvoke(() => MessageBox.Show($"Database initialization failed:\n{ex.Message}", "Database", MessageBoxButton.OK, MessageBoxImage.Warning));
+                MessageBox.Show($"Database initialization failed:\n{ex.Message}", "Database", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -108,15 +106,8 @@ namespace XRaySystem.WPF
             services.AddSingleton<WindowLevelRenderer>();
 
             // ── Sensör Modu Seçimi ────────────────────────────────────────────────
-            // SENSOR_MODE ortam değişkeniyle veya aşağıdaki satırı değiştirerek seçebilirsin:
-            //   Mock  → sentetik piksel üretir (varsayılan, donanım/veri gerektirmez)
-            //   Disk  → Tools/DicomConverter/dicom_to_raw.py ile oluşturulan gerçek DICOM verisi
-            // Örnek:  SENSOR_MODE=Disk dotnet run
-            var sensorMode = Environment.GetEnvironmentVariable("SENSOR_MODE") ?? "Mock";
-            if (sensorMode.Equals("Disk", StringComparison.OrdinalIgnoreCase))
-                services.AddSingleton<ISensorService, DiskImageSensorService>();
-            else
-                services.AddSingleton<ISensorService, MockXRaySensorService>();
+            // Matematiksel 16-bit Dijital Test Fantomu simülatörü (MockXRaySensorService)
+            services.AddSingleton<ISensorService, MockXRaySensorService>();
 
             services.AddSingleton<ICloudPublisher, NullCloudPublisher>();
 

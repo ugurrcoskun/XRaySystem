@@ -4,9 +4,43 @@
         Title="CMOS X-Ray Telemetry System" Height="800" Width="1300"
         Background="#0B0F19"
         FontFamily="Segoe UI"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        PreviewMouseDown="Window_PreviewMouseDown">
 
     <Window.Resources>
+        <Style x:Key="ModernInputTextBoxStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="#1E293B"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="BorderBrush" Value="#334155"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Cursor" Value="IBeam"/>
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocused" Value="True">
+                    <Setter Property="BorderBrush" Value="#00F0FF"/>
+                    <Setter Property="BorderThickness" Value="1.5"/>
+                    <Setter Property="Background" Value="#0F172A"/>
+                </Trigger>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="BorderBrush" Value="#475569"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="ValidationInputTextBoxStyle" BasedOn="{StaticResource ModernInputTextBoxStyle}" TargetType="TextBox">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ExposureTimeIsValid}" Value="False">
+                    <Setter Property="BorderBrush" Value="#FF3B30"/>
+                    <Setter Property="BorderThickness" Value="2"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="PanelStyle" TargetType="Border">
             <Setter Property="Background" Value="#131A2A"/>
             <Setter Property="BorderBrush" Value="#1E293B"/>
@@ -97,7 +131,7 @@
         </Style>
     </Window.Resources>
 
-    <Grid Margin="20">
+    <Grid x:Name="RootGrid" Focusable="True" FocusVisualStyle="{x:Null}" Background="Transparent" Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -115,45 +149,7 @@
                 <TextBlock Text="X-RAY VISION CORE" Foreground="#FFFFFF" FontSize="28" FontWeight="Bold"/>
                 <TextBlock Text="INDUSTRIAL CMOS SENSOR TELEMETRY" Foreground="#00F0FF" FontSize="12" FontWeight="SemiBold" Margin="0,2,0,0"/>
             </StackPanel>
-            
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <StackPanel Orientation="Vertical" VerticalAlignment="Center" Margin="0,0,15,0">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="EXPOSURE (ms):" Foreground="#64748B" VerticalAlignment="Center" Margin="0,0,5,0" FontWeight="SemiBold"/>
-                        <!-- TextBox rengi: geçerli=mavi çerçeve, geçersiz=kırmızı çerçeve -->
-                        <TextBox Text="{Binding UserExposureTime, UpdateSourceTrigger=PropertyChanged}" 
-                                 Width="70" Height="30" 
-                                 VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
-                                 Background="#1E293B" Foreground="White" FontSize="14">
-                            <TextBox.Style>
-                                <Style TargetType="TextBox">
-                                    <Setter Property="BorderThickness" Value="1"/>
-                                    <Setter Property="BorderBrush" Value="#334155"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ExposureTimeIsValid}" Value="False">
-                                            <Setter Property="BorderBrush" Value="#FF3B30"/>
-                                            <Setter Property="BorderThickness" Value="2"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBox.Style>
-                        </TextBox>
-                    </StackPanel>
-                    <!-- Min/Max göstergesi, geçersizse kırmızı -->
-                    <TextBlock Text="{Binding ExposureValidationMessage}" FontSize="9" Margin="0,2,0,0">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="#475569"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding ExposureTimeIsValid}" Value="False">
-                                        <Setter Property="Foreground" Value="#FF3B30"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-                </StackPanel>
-
+                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                 <Button Command="{Binding SnapCommand}" Margin="0,0,10,0">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
@@ -215,7 +211,7 @@
                 <ColumnDefinition Width="310"/>
             </Grid.ColumnDefinitions>
 
-            <!-- SOL PANEL: Metrikler ve Veritabanı -->
+            <!-- SOL PANEL: Metrikler ve Kullanıcı Parametre Girdileri -->
             <Grid x:Name="TelemetryPanel" Grid.Column="0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -262,25 +258,61 @@
                     </Border>
                 </UniformGrid>
 
-                <Border Grid.Row="1" Style="{StaticResource PanelStyle}" Margin="0,0,0,10" Padding="14">
+                <!-- KULLANICI PARAMETRE GİRDİLERİ (X-RAY TUBE INPUTS) -->
+                <Border Grid.Row="1" Style="{StaticResource PanelStyle}" Margin="0,0,0,10" Padding="16">
                     <StackPanel>
-                        <TextBlock Text="WINDOW / LEVEL" Style="{StaticResource MetricLabelStyle}"/>
-                        <Grid Margin="0,10,0,0">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
-                            <TextBlock Text="CENTER" Foreground="#64748B" FontSize="10" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Text="{Binding WCenter, StringFormat={}{0:0.0}}" Foreground="White" HorizontalAlignment="Right"/>
+                        <TextBlock Text="TÜP PARAMETRE GİRDİLERİ" Foreground="#00F0FF" FontSize="14" FontWeight="Bold" Margin="0,0,0,14"/>
+                        
+                        <!-- TUBE VOLTAGE (kV) INPUT -->
+                        <TextBlock Text="TÜP VOLTAJI (kV):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding UserVoltage, UpdateSourceTrigger=PropertyChanged}" 
+                                     Style="{StaticResource ModernInputTextBoxStyle}"/>
+                            <TextBlock Grid.Column="1" Text="kV" Foreground="#94A3B8" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </Grid>
-                        <Slider Minimum="0" Maximum="65535" Value="{Binding WCenter, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding HasRawSource}" Margin="0,2,0,8"/>
-                        <Grid>
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="58"/></Grid.ColumnDefinitions>
-                            <TextBlock Text="WIDTH" Foreground="#64748B" FontSize="10" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Text="{Binding WWidth, StringFormat={}{0:0}}" Foreground="White" HorizontalAlignment="Right"/>
+
+                        <!-- TUBE CURRENT (mA) INPUT -->
+                        <TextBlock Text="TÜP AKIMI (mA):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding UserTubeCurrent, UpdateSourceTrigger=PropertyChanged}" 
+                                     Style="{StaticResource ModernInputTextBoxStyle}"/>
+                            <TextBlock Grid.Column="1" Text="mA" Foreground="#94A3B8" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </Grid>
-                        <Slider Minimum="1" Maximum="65535" Value="{Binding WWidth, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding HasRawSource}" Margin="0,2,0,8"/>
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="AUTO" Command="{Binding AutoWindowLevelCommand}" IsEnabled="{Binding HasRawSource}" Padding="10,4" FontSize="10" Margin="0,0,6,0"/>
-                            <Button Content="RESET" Command="{Binding ResetWindowLevelCommand}" IsEnabled="{Binding HasRawSource}" Padding="10,4" FontSize="10"/>
-                        </StackPanel>
+
+                        <!-- EXPOSURE TIME (ms) INPUT -->
+                        <TextBlock Text="POZLAMA SÜRESİ (ms):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding UserExposureTime, UpdateSourceTrigger=PropertyChanged}" 
+                                     Style="{StaticResource ValidationInputTextBoxStyle}"/>
+                            <TextBlock Grid.Column="1" Text="ms" Foreground="#94A3B8" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                        </Grid>
+
+                        <!-- Exposure Validation Info Message -->
+                        <TextBlock Text="{Binding ExposureValidationMessage}" FontSize="10" Margin="0,2,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="#64748B"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ExposureTimeIsValid}" Value="False">
+                                            <Setter Property="Foreground" Value="#FF3B30"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+
                     </StackPanel>
                 </Border>
 

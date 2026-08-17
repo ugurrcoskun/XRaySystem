@@ -15,13 +15,12 @@ namespace XRaySystem.Infrastructure.Sensors;
 
 /// <summary>
 /// ISensorService implementasyonu: Gerçek DICOM'dan dönüştürülmüş
-/// .raw (ushort little-endian) dosyalarını diskten okuyarak
-/// MockXRaySensorService ile aynı arayüzü sağlar.
+/// .raw (ushort little-endian) dosyalarını diskten okuyarak X-Ray simülasyonunu sağlar.
 ///
 /// Kullanım:
 ///   1. Tools/DicomConverter/dicom_to_raw.py ile DICOM → .raw dönüşümü yap.
 ///   2. Üretilen dosyaları ve manifest.json'u SampleData/ klasörüne koy.
-///   3. DI'da MockXRaySensorService yerine bu sınıfı kaydet.
+///   3. DI ortamında varsayılan sensör servisi olarak çalışır.
 ///
 /// SampleData klasörü aranma sırası:
 ///   1. Constructor'a verilen explicit path
