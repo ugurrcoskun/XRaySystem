@@ -12,6 +12,7 @@ using XRaySystem.Domain.Interfaces;
 using XRaySystem.Domain.ValueObjects;
 using XRaySystem.WPF.Services;
 using XRaySystem.Domain.WindowLevel;
+using System.Windows;
 using System.Windows.Media.Imaging;
 
 namespace XRaySystem.WPF.ViewModels;
@@ -361,8 +362,9 @@ public partial class LiveTelemetryViewModel : ObservableObject
         }
     }
 
-    public bool   ExposureTimeIsValid      => UserExposureTime >= MinExposureTime && UserExposureTime <= MaxExposureTime;
-    public string ExposureValidationMessage => ExposureTimeIsValid
+    public bool   ExposureTimeIsValid        => UserExposureTime >= MinExposureTime && UserExposureTime <= MaxExposureTime;
+    public Visibility ExposureTimeErrorVisibility => ExposureTimeIsValid ? Visibility.Collapsed : Visibility.Visible;
+    public string ExposureValidationMessage   => ExposureTimeIsValid
         ? $"Geçerli aralık: {MinExposureTime:F0}–{MaxExposureTime:F0} ms"
         : $"⚠ Geçersiz! Aralık: {MinExposureTime:F0}–{MaxExposureTime:F0} ms";
 

@@ -2,13 +2,25 @@ using System.Windows;
 using System.Threading.Tasks;
 using System.ComponentModel;
 using System.Windows.Input;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using XRaySystem.WPF.ViewModels;
+using XRaySystem.WPF.Views;
 
 namespace XRaySystem.WPF
 {
     public partial class MainWindow : Window
     {
         private bool _startupHistoryLoadStarted;
+
+        // ── Comparison selection (max 4) ──
+        private readonly List<ComparisonItem> _comparisonSelection = new();
+        private readonly Dictionary<Guid, Button> _compBtnMap = new();
+
 
         // DI üzerinden LiveTelemetryViewModel otomatik olarak enjekte edilecek
         public MainWindow(LiveTelemetryViewModel viewModel)
@@ -30,6 +42,9 @@ namespace XRaySystem.WPF
 
         private void Window_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
+            if (XRayScanBorder != null && XRayScanBorder.IsMouseOver)
+                return;
+
             if (e.OriginalSource is not System.Windows.Controls.TextBox &&
                 e.OriginalSource is not System.Windows.Controls.Primitives.TextBoxBase)
             {
@@ -54,133 +69,122 @@ namespace XRaySystem.WPF
             }
         }
 
-        private const double MinZoom = 1.0;
-        private const double MaxZoom = 20.0;
-        private Point _start;
-        private Point _origin;
-        private bool _panStarted;
+        private const double MainMinZoom = 0.05;
+        private const double MainMaxZoom = 200.0;
+        private double _mainScale = 1.0;
+        private double _mainTransX = 0.0;
+        private double _mainTransY = 0.0;
+        private bool _mainIsMouseDown;
+        private Point _mainPanStart;
+        private double _mainPanOriginX, _mainPanOriginY;
+        private bool _mainIsPanning;
 
         private void XRayImage_MouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
         {
             var border = (System.Windows.Controls.Border)sender;
-            Point mousePos = e.GetPosition(border);
-
-            // Mac Trackpad (Parallels vb.) için hassas ve pürüzsüz zoom hesaplaması
-            // Standart fare tekerleği e.Delta genelde 120'dir. Trackpad'ler daha küçük ve sık değer atar.
             if (e.Delta == 0) return;
-            ApplyZoom(Math.Exp(e.Delta / 1200.0), mousePos);
+            Point mousePos = e.GetPosition(border);
+            double factor = Math.Exp(e.Delta / 1200.0);
+            MainApplyZoom(factor, mousePos, border);
             e.Handled = true;
         }
 
-        private void ApplyZoom(double zoomFactor, Point center)
+        private void MainApplyZoom(double factor, Point center, System.Windows.Controls.Border viewport)
         {
-            double oldScale = XRayScaleTransform.ScaleX;
-            double newScale = Math.Clamp(oldScale * zoomFactor, MinZoom, MaxZoom);
-            if (Math.Abs(newScale - oldScale) < 0.000001) return;
-            var rect = GetImageRect();
-            var transformOrigin = GetTransformOrigin();
-            var imagePoint = new Point((center.X - transformOrigin.X - XRayTranslateTransform.X) / oldScale + transformOrigin.X,
-                (center.Y - transformOrigin.Y - XRayTranslateTransform.Y) / oldScale + transformOrigin.Y);
-            XRayScaleTransform.ScaleX = XRayScaleTransform.ScaleY = newScale;
-            XRayTranslateTransform.X = center.X - transformOrigin.X - (imagePoint.X - transformOrigin.X) * newScale;
-            XRayTranslateTransform.Y = center.Y - transformOrigin.Y - (imagePoint.Y - transformOrigin.Y) * newScale;
-            ClampTranslation();
+            double oldScale = _mainScale;
+            double newScale = Math.Clamp(oldScale * factor, MainMinZoom, MainMaxZoom);
+            if (Math.Abs(newScale - oldScale) < 1e-9) return;
+
+            double originX = viewport.ActualWidth / 2.0;
+            double originY = viewport.ActualHeight / 2.0;
+            double imgX = (center.X - originX - _mainTransX) / oldScale + originX;
+            double imgY = (center.Y - originY - _mainTransY) / oldScale + originY;
+
+            _mainScale = newScale;
+            _mainTransX = center.X - originX - (imgX - originX) * newScale;
+            _mainTransY = center.Y - originY - (imgY - originY) * newScale;
+
+            SyncMainTransforms();
+        }
+
+        private void SyncMainTransforms()
+        {
+            XRayScaleTransform.ScaleX = _mainScale;
+            XRayScaleTransform.ScaleY = _mainScale;
+            XRayTranslateTransform.X = _mainTransX;
+            XRayTranslateTransform.Y = _mainTransY;
             UpdateZoomText();
         }
 
         private void ZoomIn_Click(object sender, RoutedEventArgs e)
         {
-            var center = new Point(XRayContainer.ActualWidth / 2, XRayContainer.ActualHeight / 2);
-            ApplyZoom(1.25, center);
+            var center = new Point(XRayScanBorder.ActualWidth / 2, XRayScanBorder.ActualHeight / 2);
+            MainApplyZoom(1.25, center, XRayScanBorder);
         }
 
         private void ZoomOut_Click(object sender, RoutedEventArgs e)
         {
-            var center = new Point(XRayContainer.ActualWidth / 2, XRayContainer.ActualHeight / 2);
-            ApplyZoom(1 / 1.25, center);
+            var center = new Point(XRayScanBorder.ActualWidth / 2, XRayScanBorder.ActualHeight / 2);
+            MainApplyZoom(1.0 / 1.25, center, XRayScanBorder);
         }
 
-        private void ZoomReset_Click(object sender, RoutedEventArgs e)
+        private void ZoomReset_Click(object sender, RoutedEventArgs e) => ResetImageView();
+
+        private void ResetImageView()
         {
-            XRayScaleTransform.ScaleX = XRayScaleTransform.ScaleY = MinZoom;
-            XRayTranslateTransform.X = XRayTranslateTransform.Y = 0;
-            UpdateZoomText();
+            _mainScale = 1.0;
+            _mainTransX = 0;
+            _mainTransY = 0;
+            SyncMainTransforms();
         }
 
         private void XRayImage_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             var border = (System.Windows.Controls.Border)sender;
-            if (XRayScaleTransform.ScaleX > 1.0) // Sadece zoom yapıldıysa kaydırmaya izin ver
-            {
-                border.CaptureMouse();
-                _start = e.GetPosition(border);
-                _origin = new Point(XRayTranslateTransform.X, XRayTranslateTransform.Y);
-                _panStarted = false;
-            }
+            _mainIsMouseDown = true;
+            _mainIsPanning = false;
+            _mainPanStart = e.GetPosition(border);
+            _mainPanOriginX = _mainTransX;
+            _mainPanOriginY = _mainTransY;
+            border.CaptureMouse();
         }
 
         private void XRayImage_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
         {
             var border = (System.Windows.Controls.Border)sender;
-            if (border.IsMouseCaptured)
+            if (!_mainIsMouseDown || !border.IsMouseCaptured) return;
+            var current = e.GetPosition(border);
+            var delta = current - _mainPanStart;
+            if (!_mainIsPanning)
             {
-                var current = e.GetPosition(border);
-                var delta = current - _start;
-                if (!_panStarted && delta.Length < 4) return;
-                _panStarted = true;
-                XRayTranslateTransform.X = _origin.X + delta.X;
-                XRayTranslateTransform.Y = _origin.Y + delta.Y;
-                ClampTranslation();
+                if (delta.Length < 6) return;
+                _mainIsPanning = true;
             }
+            _mainTransX = _mainPanOriginX + delta.X;
+            _mainTransY = _mainPanOriginY + delta.Y;
+            SyncMainTransforms();
         }
 
         private void XRayImage_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
             var border = (System.Windows.Controls.Border)sender;
-            border.ReleaseMouseCapture();
-            _panStarted = false;
+            _mainIsMouseDown = false;
+            _mainIsPanning = false;
+            if (border.IsMouseCaptured)
+            {
+                border.ReleaseMouseCapture();
+            }
         }
 
-        private void XRayImage_LostMouseCapture(object sender, MouseEventArgs e) => _panStarted = false;
-
-        private Rect GetImageRect()
+        private void XRayImage_LostMouseCapture(object sender, MouseEventArgs e)
         {
-            if (XRayImage.Source is not System.Windows.Media.Imaging.BitmapSource source || XRayContainer.ActualWidth <= 0 || XRayContainer.ActualHeight <= 0)
-                return new Rect(0, 0, XRayContainer.ActualWidth, XRayContainer.ActualHeight);
-            double fit = Math.Min(XRayContainer.ActualWidth / source.PixelWidth, XRayContainer.ActualHeight / source.PixelHeight);
-            double width = source.PixelWidth * fit, height = source.PixelHeight * fit;
-            return new Rect((XRayContainer.ActualWidth - width) / 2, (XRayContainer.ActualHeight - height) / 2, width, height);
+            _mainIsMouseDown = false;
+            _mainIsPanning = false;
         }
 
-        private void ClampTranslation()
-        {
-            var rect = GetImageRect();
-            var origin = GetTransformOrigin();
-            XRayTranslateTransform.X = ClampAxis(XRayTranslateTransform.X, rect.Left, rect.Right, origin.X, XRayScaleTransform.ScaleX, XRayContainer.ActualWidth);
-            XRayTranslateTransform.Y = ClampAxis(XRayTranslateTransform.Y, rect.Top, rect.Bottom, origin.Y, XRayScaleTransform.ScaleY, XRayContainer.ActualHeight);
-        }
-
-        private static double ClampAxis(double value, double contentStart, double contentEnd, double origin, double scale, double viewport)
-        {
-            double start = origin + (contentStart - origin) * scale;
-            double end = origin + (contentEnd - origin) * scale;
-            if (end - start <= viewport)
-                return origin - (start + end) / 2;
-
-            double min = viewport - end;
-            double max = -start;
-            return Math.Clamp(value, min, max);
-        }
-
-        private Point GetTransformOrigin() => new(XRayContainer.ActualWidth / 2, XRayContainer.ActualHeight / 2);
-
-        private void UpdateZoomText() => ZoomPercentText.Text = $"{XRayScaleTransform.ScaleX * 100:0}%";
-        private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e) { ClampTranslation(); UpdateResponsiveLayout(); }
-        private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
-        {
-            if (e.PropertyName == nameof(LiveTelemetryViewModel.CurrentFrame))
-                Dispatcher.BeginInvoke(new Action(UpdateResponsiveLayout));
-        }
+        private void UpdateZoomText() => ZoomPercentText.Text = $"{_mainScale * 100:0}%";
+        private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e) { UpdateResponsiveLayout(); }
+        private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e) { }
         private void UpdateResponsiveLayout()
         {
             if (ContentGrid == null) return;
@@ -196,12 +200,6 @@ namespace XRaySystem.WPF
             ContentGrid.RowDefinitions[1].Height = compact ? GridLength.Auto : new GridLength(0);
         }
 
-        private void ResetImageView()
-        {
-            XRayScaleTransform.ScaleX = XRayScaleTransform.ScaleY = MinZoom;
-            XRayTranslateTransform.X = XRayTranslateTransform.Y = 0;
-            UpdateZoomText();
-        }
 
         /// <summary>
         /// History listesinden bir öğe seçildiğinde TIFF dosyasını diskten yükler ve ekrana basar.
@@ -341,6 +339,196 @@ namespace XRaySystem.WPF
                     MessageBox.Show($"Dosya kopyalanamadı:\n{ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
+        }
+
+        // ════════════════════════════════════════════════
+        //  COMPARISON HANDLERS
+        // ════════════════════════════════════════════════
+
+        private void AddToComparison_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button btn) return;
+            if (btn.DataContext is not XRaySystem.Application.DTOs.SensorDataDto item) return;
+            if (string.IsNullOrEmpty(item.ImagePath) || !File.Exists(item.ImagePath))
+            {
+                MessageBox.Show("Görüntü dosyası henüz kaydedilmemiş.", "Bilgi");
+                return;
+            }
+
+            // Toggle: already selected? → remove
+            var existing = _comparisonSelection.FirstOrDefault(c => c.Dto.Id == item.Id);
+            if (existing != null)
+            {
+                _comparisonSelection.Remove(existing);
+                SetCompBtnState(btn, false);
+                RemoveThumbFromBar(item.Id);
+            }
+            else
+            {
+                if (_comparisonSelection.Count >= 4)
+                {
+                    MessageBox.Show("Maksimum 4 görsel seçebilirsiniz.", "Sınır Aşıldı");
+                    return;
+                }
+
+                // Load tiny thumbnail (300px wide, fast)
+                BitmapSource? thumb = null;
+                try
+                {
+                    var bi = new BitmapImage();
+                    bi.BeginInit();
+                    bi.UriSource = new Uri(item.ImagePath, UriKind.Absolute);
+                    bi.DecodePixelWidth = 220;
+                    bi.CacheOption = BitmapCacheOption.OnLoad;
+                    bi.EndInit();
+                    bi.Freeze();
+                    thumb = bi;
+                }
+                catch { /* leave null */ }
+
+                var ci = new ComparisonItem(item, thumb);
+                _comparisonSelection.Add(ci);
+                SetCompBtnState(btn, true);
+                AddThumbToBar(ci);
+                _compBtnMap[item.Id] = btn;
+            }
+
+            UpdateComparisonBarVisibility();
+        }
+
+        private void SetCompBtnState(Button btn, bool selected)
+        {
+            // Walk template to find TextBlock named BtnText
+            if (btn.Template?.FindName("BtnText", btn) is System.Windows.Controls.TextBlock tb)
+            {
+                tb.Text = selected ? "✓" : "+";
+                tb.Foreground = selected
+                    ? new SolidColorBrush(Color.FromRgb(0, 255, 140))
+                    : new SolidColorBrush(Color.FromRgb(0, 170, 255));
+            }
+            if (btn.Template?.FindName("Bd", btn) is Border bd)
+            {
+                bd.Background = selected
+                    ? new SolidColorBrush(Color.FromRgb(0, 40, 20))
+                    : new SolidColorBrush(Color.FromRgb(15, 42, 74));
+                bd.BorderBrush = selected
+                    ? new SolidColorBrush(Color.FromRgb(0, 200, 80))
+                    : new SolidColorBrush(Color.FromRgb(26, 74, 122));
+            }
+        }
+
+        private void AddThumbToBar(ComparisonItem ci)
+        {
+            var container = new Border
+            {
+                Width = 90, Height = 68,
+                Margin = new Thickness(0, 0, 8, 0),
+                CornerRadius = new CornerRadius(5),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0, 100, 180)),
+                BorderThickness = new Thickness(1),
+                Background = Brushes.Black,
+                ClipToBounds = true,
+                Tag = ci.Dto.Id
+            };
+            var grid = new Grid();
+
+            // Image
+            var img = new Image
+            {
+                Source = ci.Thumbnail,
+                Stretch = Stretch.Uniform,
+                Opacity = 0.85
+            };
+            grid.Children.Add(img);
+
+            // Info overlay
+            var info = new TextBlock
+            {
+                Text = $"{ci.Dto.Timestamp:HH:mm:ss}\n{ci.Voltage:F0} kV · {ci.TubeCurrent:F0} mA",
+                Foreground = new SolidColorBrush(Colors.White),
+                FontSize = 8,
+                FontFamily = new FontFamily("Consolas"),
+                Background = new SolidColorBrush(Color.FromArgb(160, 0, 10, 25)),
+                Padding = new Thickness(4, 2, 4, 2),
+                VerticalAlignment = System.Windows.VerticalAlignment.Bottom,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch,
+                TextWrapping = TextWrapping.Wrap
+            };
+            grid.Children.Add(info);
+
+            // × remove button
+            var removeBtn = new Button
+            {
+                Content = "✕",
+                Width = 16, Height = 16,
+                Background = new SolidColorBrush(Color.FromArgb(200, 20, 0, 0)),
+                Foreground = new SolidColorBrush(Color.FromRgb(220, 60, 60)),
+                BorderThickness = new Thickness(0),
+                FontSize = 9,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+                VerticalAlignment = System.Windows.VerticalAlignment.Top,
+                Margin = new Thickness(0, 2, 2, 0),
+                Tag = ci.Dto.Id
+            };
+            removeBtn.Click += RemoveFromComparison_Click;
+            grid.Children.Add(removeBtn);
+
+            container.Child = grid;
+            ComparisonThumbStrip.Children.Add(container);
+        }
+
+        private void RemoveFromComparison_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || fe.Tag is not Guid id) return;
+            var ci = _comparisonSelection.FirstOrDefault(c => c.Dto.Id == id);
+            if (ci == null) return;
+            _comparisonSelection.Remove(ci);
+            RemoveThumbFromBar(id);
+            // Reset + button if still in DOM
+            if (_compBtnMap.TryGetValue(id, out var btn))
+            {
+                SetCompBtnState(btn, false);
+                _compBtnMap.Remove(id);
+            }
+            UpdateComparisonBarVisibility();
+        }
+
+        private void RemoveThumbFromBar(Guid id)
+        {
+            var toRemove = ComparisonThumbStrip.Children
+                .OfType<Border>()
+                .FirstOrDefault(b => b.Tag is Guid g && g == id);
+            if (toRemove != null) ComparisonThumbStrip.Children.Remove(toRemove);
+        }
+
+        private void ClearComparison_Click(object sender, RoutedEventArgs e)
+        {
+            // Reset all + buttons
+            foreach (var ci in _comparisonSelection.ToList())
+            {
+                if (_compBtnMap.TryGetValue(ci.Dto.Id, out var btn))
+                    SetCompBtnState(btn, false);
+            }
+            _comparisonSelection.Clear();
+            _compBtnMap.Clear();
+            ComparisonThumbStrip.Children.Clear();
+            UpdateComparisonBarVisibility();
+        }
+
+        private void UpdateComparisonBarVisibility()
+        {
+            ComparisonBar.Visibility = _comparisonSelection.Count > 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
+        private void OpenComparison_Click(object sender, RoutedEventArgs e)
+        {
+            if (_comparisonSelection.Count == 0) return;
+            var win = new ComparisonWindow(_comparisonSelection);
+            win.Owner = this;
+            win.ShowDialog();
         }
 
     }
