@@ -140,9 +140,9 @@ public partial class ComparisonWindow : Window
         var imageContainer = new Grid { RenderTransformOrigin = new Point(0.5, 0.5), IsHitTestVisible = false };
         imageContainer.RenderTransform = tg;
 
-        // Load image
-        BitmapSource? bmp = item.Thumbnail;
-        if (bmp == null && item.ImagePath != null && System.IO.File.Exists(item.ImagePath))
+        // Load full-resolution original image for comparison viewport
+        BitmapSource? bmp = null;
+        if (!string.IsNullOrEmpty(item.ImagePath) && System.IO.File.Exists(item.ImagePath))
         {
             try
             {
@@ -154,7 +154,11 @@ public partial class ComparisonWindow : Window
                 tiff.Freeze();
                 bmp = tiff;
             }
-            catch { /* keep null */ }
+            catch { /* fallback */ }
+        }
+        if (bmp == null)
+        {
+            bmp = item.Thumbnail;
         }
 
         var img = new Image
@@ -246,9 +250,8 @@ public partial class ComparisonWindow : Window
         }
 
         AddMetaToStack("kV", $"{item.Voltage:F0}", "kV", Color.FromRgb(0, 200, 255));
-        AddMetaToStack("mA", $"{item.TubeCurrent:F0}", "mA", Color.FromRgb(0, 220, 140));
+        AddMetaToStack("P", $"{item.PowerW:F0}", "W", Color.FromRgb(0, 220, 140));
         AddMetaToStack("ms", $"{item.ExposureTime:F0}", "ms", Color.FromRgb(255, 180, 50));
-        AddMetaToStack("kW", $"{item.PowerKW:F2}", "kW", Color.FromRgb(200, 100, 255));
         AddMetaToStack("T", item.Dto.Timestamp.ToString("HH:mm:ss"), "", Color.FromRgb(130, 150, 170));
 
         metaBg.Child = metaStack;

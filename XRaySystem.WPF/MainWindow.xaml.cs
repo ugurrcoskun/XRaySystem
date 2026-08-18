@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Threading.Tasks;
-using System.ComponentModel;
 using System.Windows.Input;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -32,7 +31,6 @@ namespace XRaySystem.WPF
             Loaded += MainWindow_Loaded;
             Closed += Window_Closed;
             SizeChanged += MainWindow_SizeChanged;
-            viewModel.PropertyChanged += ViewModel_PropertyChanged;
         }
 
         private void Window_Closed(object? sender, EventArgs e)
@@ -184,7 +182,6 @@ namespace XRaySystem.WPF
 
         private void UpdateZoomText() => ZoomPercentText.Text = $"{_mainScale * 100:0}%";
         private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e) { UpdateResponsiveLayout(); }
-        private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e) { }
         private void UpdateResponsiveLayout()
         {
             if (ContentGrid == null) return;
@@ -194,10 +191,12 @@ namespace XRaySystem.WPF
             ContentGrid.ColumnDefinitions[0].Width = compact ? new GridLength(0) : new GridLength(medium ? 250 : 330);
             ContentGrid.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
             ContentGrid.ColumnDefinitions[2].Width = compact ? new GridLength(0) : new GridLength(medium ? 250 : 310);
-            System.Windows.Controls.Grid.SetColumn(ScanPanel, compact ? 0 : 1);
-            System.Windows.Controls.Grid.SetColumn(HistoryPanel, compact ? 0 : 2);
+            System.Windows.Controls.Grid.SetColumn(ScanPanel, 1);
+            System.Windows.Controls.Grid.SetColumn(HistoryPanel, compact ? 1 : 2);
             System.Windows.Controls.Grid.SetRow(HistoryPanel, compact ? 1 : 0);
-            ContentGrid.RowDefinitions[1].Height = compact ? GridLength.Auto : new GridLength(0);
+            ContentGrid.RowDefinitions[1].Height = compact ? new GridLength(220) : new GridLength(0);
+            ScanPanel.Margin = compact ? new Thickness(0, 0, 0, 10) : new Thickness(10, 0, 0, 0);
+            HistoryPanel.Margin = compact ? new Thickness(0) : new Thickness(10, 0, 0, 0);
         }
 
 
@@ -227,7 +226,7 @@ namespace XRaySystem.WPF
             try
             {
                 vm.LoadHistoryTiff(item.ImagePath, item);
-                vm.ImageStatusBadgeText  = $"📁 GEÇMİŞ İNCELEME: {System.IO.Path.GetFileName(item.ImagePath)} ({item.Timestamp:yyyy-MM-dd HH:mm:ss})";
+                vm.ImageStatusBadgeText  = $"📁 GEÇMİŞ İNCELEME: {item.Voltage:F0} kV · {item.PowerW:F0} W ({item.Timestamp:yyyy-MM-dd HH:mm:ss})";
                 vm.ImageStatusBadgeColor = "#00F0FF";
                 ResetImageView();
             }
@@ -322,7 +321,7 @@ namespace XRaySystem.WPF
 
             var dialog = new Microsoft.Win32.SaveFileDialog
             {
-                FileName = System.IO.Path.GetFileName(item.ImagePath),
+                FileName = $"image_{item.Voltage:F0}kV_{item.PowerW:F0}W_{item.ExposureTime:F0}ms_{item.Timestamp:yyyyMMdd_HHmmss}.tiff",
                 DefaultExt = ".tiff",
                 Filter = "TIFF Görüntü Dosyası (*.tiff;*.tif)|*.tiff;*.tif|Tüm Dosyalar (*.*)|*.*"
             };
@@ -403,17 +402,17 @@ namespace XRaySystem.WPF
             {
                 tb.Text = selected ? "✓" : "+";
                 tb.Foreground = selected
-                    ? new SolidColorBrush(Color.FromRgb(0, 255, 140))
-                    : new SolidColorBrush(Color.FromRgb(0, 170, 255));
+                    ? new SolidColorBrush(Color.FromRgb(92, 255, 255))
+                    : new SolidColorBrush(Color.FromRgb(0, 240, 255));
             }
             if (btn.Template?.FindName("Bd", btn) is Border bd)
             {
-                bd.Background = selected
-                    ? new SolidColorBrush(Color.FromRgb(0, 40, 20))
-                    : new SolidColorBrush(Color.FromRgb(15, 42, 74));
                 bd.BorderBrush = selected
-                    ? new SolidColorBrush(Color.FromRgb(0, 200, 80))
-                    : new SolidColorBrush(Color.FromRgb(26, 74, 122));
+                    ? new SolidColorBrush(Color.FromRgb(0, 240, 255))
+                    : new SolidColorBrush(Color.FromRgb(51, 65, 85));
+                bd.Background = selected
+                    ? new SolidColorBrush(Color.FromRgb(15, 23, 42))
+                    : new SolidColorBrush(Color.FromRgb(30, 41, 59));
             }
         }
 
@@ -444,7 +443,7 @@ namespace XRaySystem.WPF
             // Info overlay
             var info = new TextBlock
             {
-                Text = $"{ci.Dto.Timestamp:HH:mm:ss}\n{ci.Voltage:F0} kV · {ci.TubeCurrent:F0} mA",
+                Text = $"{ci.Dto.Timestamp:HH:mm:ss}\n{ci.Voltage:F0} kV · {ci.PowerW:F0} W",
                 Foreground = new SolidColorBrush(Colors.White),
                 FontSize = 8,
                 FontFamily = new FontFamily("Consolas"),

@@ -16,7 +16,7 @@ public class ProcessTelemetryUseCase
         {
             Id = measurement.Id,
             Timestamp = measurement.Timestamp.ToLocalTime(),
-            TubeCurrent = measurement.Readings.TubeCurrent,
+            PowerW = measurement.Readings.Voltage * measurement.Readings.TubeCurrent,
             Voltage = measurement.Readings.Voltage,
             XRayIntensity = measurement.Readings.XRayIntensity,
             ExposureTime = measurement.Readings.ExposureTime,

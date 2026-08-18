@@ -20,9 +20,8 @@ public partial class ComparisonItem : ObservableObject
 
     public string Label => Dto.Timestamp.ToString("HH:mm:ss");
     public double Voltage => Dto.Voltage;
-    public double TubeCurrent => Dto.TubeCurrent;
+    public double PowerW => Dto.PowerW;
     public double ExposureTime => Dto.ExposureTime;
-    public double PowerKW => Math.Round(Dto.Voltage * Dto.TubeCurrent / 1000.0, 2);
     public string? ImagePath => Dto.ImagePath;
 
     public ComparisonItem(SensorDataDto dto, BitmapSource? thumbnail = null)

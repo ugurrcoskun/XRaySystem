@@ -224,10 +224,10 @@
                 <UniformGrid Grid.Row="0" Columns="2">
                     <Border Style="{StaticResource PanelStyle}" Margin="0,0,5,10">
                         <StackPanel>
-                            <TextBlock Text="TUBE CURRENT" Style="{StaticResource MetricLabelStyle}"/>
+                            <TextBlock Text="TUBE POWER" Style="{StaticResource MetricLabelStyle}"/>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
-                                <TextBlock Text="{Binding LatestTelemetry.TubeCurrent, StringFormat={}{0:F2}, FallbackValue=0.00}" Style="{StaticResource MetricValueStyle}"/>
-                                <TextBlock Text=" mA" Foreground="#64748B" FontSize="16" VerticalAlignment="Bottom" Margin="5,0,0,5"/>
+                                <TextBlock Text="{Binding LatestTelemetry.PowerW, StringFormat={}{0:F2}, FallbackValue=0.00}" Style="{StaticResource MetricValueStyle}"/>
+                                <TextBlock Text=" W" Foreground="#64748B" FontSize="16" VerticalAlignment="Bottom" Margin="5,0,0,5"/>
                             </StackPanel>
                         </StackPanel>
                     </Border>
@@ -278,16 +278,16 @@
                             <TextBlock Grid.Column="1" Text="kV" Foreground="#94A3B8" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </Grid>
 
-                        <!-- TUBE CURRENT (mA) INPUT -->
-                        <TextBlock Text="TÜP AKIMI (mA):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <!-- TUBE POWER (WATT) INPUT -->
+                        <TextBlock Text="TÜP GÜCÜ (WATT):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
                         <Grid Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBox Text="{Binding UserTubeCurrent, UpdateSourceTrigger=PropertyChanged}" 
+                            <TextBox Text="{Binding UserPowerW, UpdateSourceTrigger=PropertyChanged}"
                                      Style="{StaticResource ModernInputTextBoxStyle}"/>
-                            <TextBlock Grid.Column="1" Text="mA" Foreground="#94A3B8" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                            <TextBlock Grid.Column="1" Text="W" Foreground="#94A3B8" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </Grid>
 
                         <!-- EXPOSURE TIME (ms) INPUT -->
@@ -482,7 +482,7 @@
                                         <TextBlock Text="{Binding Timestamp, StringFormat={}{0:yyyy-MM-dd}}" 
                                                    Foreground="#475569" FontSize="10" Margin="0,0,0,6"/>
 
-                                        <!-- Telemetry Grid: kV, mA, ms -->
+                                        <!-- Telemetry Grid: kV, Watt, ms -->
                                         <UniformGrid Columns="3" Margin="0,0,0,8">
                                             <StackPanel HorizontalAlignment="Left">
                                                 <TextBlock Text="kV" Foreground="#64748B" FontSize="9" FontWeight="SemiBold"/>
@@ -490,8 +490,8 @@
                                                            Foreground="#FFFFFF" FontSize="13" FontWeight="Bold"/>
                                             </StackPanel>
                                             <StackPanel HorizontalAlignment="Center">
-                                                <TextBlock Text="mA" Foreground="#64748B" FontSize="9" FontWeight="SemiBold"/>
-                                                <TextBlock Text="{Binding TubeCurrent, StringFormat={}{0:F0}}" 
+                                                <TextBlock Text="W" Foreground="#64748B" FontSize="9" FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding PowerW, StringFormat={}{0:F0}}"
                                                            Foreground="#FFFFFF" FontSize="13" FontWeight="Bold"/>
                                             </StackPanel>
                                             <StackPanel HorizontalAlignment="Right">
@@ -584,7 +584,7 @@
 
         <!-- ══════════════ COMPARISON SELECTION BAR ══════════════ -->
         <Border x:Name="ComparisonBar" Grid.Row="3" 
-                Background="#080F1E" BorderBrush="#00AAFF" BorderThickness="0,1,0,0"
+                Background="#0F172A" BorderBrush="#00F0FF" BorderThickness="0,1,0,0"
                 Padding="12,10" Margin="0,0,0,0"
                 Visibility="Collapsed">
             <Grid>
@@ -602,7 +602,7 @@
                     <Button Content="⬡  SEÇİLENLERİ KARŞILAŞTIR" 
                             Click="OpenComparison_Click"
                             Height="38" Padding="18,0"
-                            Background="#00AAFF" Foreground="#060910" 
+                            Background="#00F0FF" Foreground="#0B0F19"
                             BorderThickness="0" FontSize="12" FontWeight="Bold" Cursor="Hand">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
@@ -611,7 +611,7 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="Bd" Property="Background" Value="#33CCFF"/>
+                                        <Setter TargetName="Bd" Property="Background" Value="#5CFFFF"/>
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>

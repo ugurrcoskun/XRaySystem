@@ -51,7 +51,7 @@ public sealed class MockXRaySensorService : ISensorService, IDisposable
             if (_currentStatus != value)
             {
                 _currentStatus = value;
-                StatusChanged?.Invoke(_currentStatus);
+                PublishStatus(_currentStatus);
             }
         }
     }
@@ -59,9 +59,16 @@ public sealed class MockXRaySensorService : ISensorService, IDisposable
     public event Action<DeviceStatus>? StatusChanged;
     public event Action<XRayMeasurement>? MeasurementReceived;
     public AcquisitionProfile Profile { get; set; } = AcquisitionProfile.IndustrialQaPhantom;
-
-    public double TargetVoltage { get; set; } = 70.0;
-    public double TargetTubeCurrent { get; set; } = 50.0;
+    private AcquisitionParameters _parameters = new(70.0, 3500.0, 500.0);
+    public AcquisitionParameters Parameters
+    {
+        get => Volatile.Read(ref _parameters);
+        set
+        {
+            value.EnsureValid();
+            Volatile.Write(ref _parameters, value);
+        }
+    }
 
     public async Task ConnectAsync()
     {
@@ -237,8 +244,9 @@ public sealed class MockXRaySensorService : ISensorService, IDisposable
             // Exposure süresini simüle et
             await Task.Delay((int)exposureTime, snapCts.Token).ConfigureAwait(false);
 
-            double actualVoltage = Math.Round(TargetVoltage + (_random.NextDouble() - 0.5) * 0.4, 1);
-            double actualCurrent = Math.Round(TargetTubeCurrent + (_random.NextDouble() - 0.5) * 0.2, 2);
+            var parameters = Parameters;
+            double actualVoltage = Math.Round(parameters.VoltageKv + (_random.NextDouble() - 0.5) * 0.4, 1);
+            double actualCurrent = Math.Round(parameters.TubeCurrentMa + (_random.NextDouble() - 0.5) * 0.2, 2);
             int intensity = (int)(actualVoltage * actualCurrent * 0.75 + _random.Next(-50, 50));
 
             var readings = new SensorReadings(
@@ -307,8 +315,9 @@ public sealed class MockXRaySensorService : ISensorService, IDisposable
             while (!token.IsCancellationRequested)
             {
                 double liveExposure = 33.0;
-                double actualVoltage = Math.Round(TargetVoltage + (_random.NextDouble() - 0.5) * 0.6, 1);
-                double actualCurrent = Math.Round(TargetTubeCurrent + (_random.NextDouble() - 0.5) * 0.3, 2);
+                var parameters = Parameters;
+                double actualVoltage = Math.Round(parameters.VoltageKv + (_random.NextDouble() - 0.5) * 0.6, 1);
+                double actualCurrent = Math.Round(parameters.TubeCurrentMa + (_random.NextDouble() - 0.5) * 0.3, 2);
                 int intensity = (int)(actualVoltage * actualCurrent * 0.35 + _random.Next(-30, 30));
 
                 var readings = new SensorReadings(
@@ -333,7 +342,11 @@ public sealed class MockXRaySensorService : ISensorService, IDisposable
                 var measurement = new XRayMeasurement(readings, frame, isSimulator: true);
                 if (token.IsCancellationRequested || generation != Volatile.Read(ref _producerGeneration))
                     break;
-                MeasurementReceived?.Invoke(measurement);
+                if (!PublishMeasurement(measurement))
+                {
+                    CurrentStatus = DeviceStatus.Error;
+                    break;
+                }
 
                 // 2 FPS
                 await Task.Delay(500, token);
@@ -392,6 +405,35 @@ public sealed class MockXRaySensorService : ISensorService, IDisposable
         }
 
         return pixels;
+    }
+
+    private void PublishStatus(DeviceStatus status)
+    {
+        if (StatusChanged is not { } handlers) return;
+        foreach (Action<DeviceStatus> handler in handlers.GetInvocationList())
+        {
+            try { handler(status); }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MockXRaySensor] Status handler error: {ex}");
+            }
+        }
+    }
+
+    private bool PublishMeasurement(XRayMeasurement measurement)
+    {
+        if (MeasurementReceived is not { } handlers) return true;
+        var succeeded = true;
+        foreach (Action<XRayMeasurement> handler in handlers.GetInvocationList())
+        {
+            try { handler(measurement); }
+            catch (Exception ex)
+            {
+                succeeded = false;
+                System.Diagnostics.Debug.WriteLine($"[MockXRaySensor] Measurement handler error: {ex}");
+            }
+        }
+        return succeeded;
     }
 
     // ── Lifecycle Helper ──────────────────────────────────────────────────────

@@ -19,7 +19,11 @@ public class XRayMeasurement
     public bool IsSimulator { get; private set; }
 
     // EF Core için parametresiz kurucu
-    protected XRayMeasurement() { Profile = AcquisitionProfile.IndustrialQaPhantom; }
+    protected XRayMeasurement()
+    {
+        Readings = null!; // EF Core materialization assigns the owned value object.
+        Profile = AcquisitionProfile.IndustrialQaPhantom;
+    }
 
     public XRayMeasurement(SensorReadings readings, RawGray16Frame frame, bool isSimulator = false)
     {

@@ -30,12 +30,17 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private readonly WindowLevelRenderer _windowLevelRenderer;
     private readonly SemaphoreSlim _historyLoadLock = new(1, 1);
     private int _sessionGeneration;
+    private PendingMeasurement? _pendingLiveMeasurement;
+    private int _liveDispatchScheduled;
+
+    private sealed record PendingMeasurement(XRayMeasurement Measurement, int Generation);
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ConnectAndStartCommand))]
     [NotifyCanExecuteChangedFor(nameof(StopCommand))]
     [NotifyCanExecuteChangedFor(nameof(DisconnectCommand))]
     [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ResumeLiveCommand))]
     private string _deviceStatus = XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString();
 
     [ObservableProperty]
@@ -50,10 +55,10 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private System.Windows.Media.ImageSource? _currentFrame;
 
     [ObservableProperty]
-    private string _imageStatusBadgeText = "🔴 CANLI YAYIN (512x512 Preview - Akış Aktif)";
+    private string _imageStatusBadgeText = "DISCONNECTED";
 
     [ObservableProperty]
-    private string _imageStatusBadgeColor = "#34C759";
+    private string _imageStatusBadgeColor = "#E57373";
 
     public ObservableCollection<SensorDataDto> TelemetryHistory { get; } = new();
     
@@ -63,7 +68,6 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [ObservableProperty]
     private SensorDataDto? _selectedHistoryItem;
 
-    private XRayMeasurement? _lastRawMeasurement;
     private RawGray16Frame? _currentRawFrame;
     private string _currentWindowLevelKey = string.Empty;
     private readonly Dictionary<string, (double Center, double Width)> _windowLevelByImage = new();
@@ -116,8 +120,8 @@ public partial class LiveTelemetryViewModel : ObservableObject
         _windowLevelRenderer = windowLevelRenderer;
 
         _sensorService.StatusChanged += OnDeviceStatusChanged;
-        _sensorService.MeasurementReceived += measurement => OnMeasurementReceived(measurement);
-        
+        _sensorService.MeasurementReceived += QueueLatestMeasurement;
+        ApplyAcquisitionParametersIfValid();
     }
 
     private void OnDeviceStatusChanged(DeviceStatus status)
@@ -139,55 +143,89 @@ public partial class LiveTelemetryViewModel : ObservableObject
                 ImageStatusBadgeText = "CONNECTED · STOPPED";
                 ImageStatusBadgeColor = "#D0B36A";
             }
+            else if (status == XRaySystem.Domain.Entities.DeviceStatus.Capturing && !IsPaused)
+            {
+                ImageStatusBadgeText = "🔴 CANLI YAYIN (512x512 Preview - Akış Aktif)";
+                ImageStatusBadgeColor = "#34C759";
+            }
             if (status != XRaySystem.Domain.Entities.DeviceStatus.Capturing && !IsPaused)
                 CurrentFrame = null;
         });
     }
 
-    private void OnMeasurementReceived(XRayMeasurement measurement, bool displayWhilePaused = false)
+    private void QueueLatestMeasurement(XRayMeasurement measurement)
     {
-        var generation = Volatile.Read(ref _sessionGeneration);
-        _lastRawMeasurement = measurement;
-        var frame = measurement.Frame;
+        Interlocked.Exchange(ref _pendingLiveMeasurement,
+            new PendingMeasurement(measurement, Volatile.Read(ref _sessionGeneration)));
+        ScheduleLatestMeasurementDispatch();
+    }
 
-        // DispatcherPriority.Background: UI'ın kullanıcı etkileşimlerine öncelik vermesini sağlar
+    private void ScheduleLatestMeasurementDispatch()
+    {
+        if (Interlocked.CompareExchange(ref _liveDispatchScheduled, 1, 0) != 0) return;
+
+        // UI meşgulse ara kareleri biriktirmek yerine yalnızca en güncel kareyi işler.
         System.Windows.Application.Current.Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Background,
-            () =>
-        {
-            if (generation != Volatile.Read(ref _sessionGeneration)) return;
-            if (IsPaused && !displayWhilePaused) return;
-            if (frame is { Pixels.Length: > 0 })
-            {
-                SetRawSource(frame, frame.Kind == FrameKind.LivePreview
-                    ? LiveWindowLevelKey
-                    : FrozenWindowLevelKey);
-                try { CurrentFrame = CreateRawFallback(frame); } catch { /* malformed source remains unavailable */ }
-                try
-                {
-                    _windowLevelRenderer.Submit(frame, WCenter, WWidth, bitmap =>
-                    {
-                        if (generation == Volatile.Read(ref _sessionGeneration) && (!IsPaused || displayWhilePaused))
-                            CurrentFrame = bitmap;
-                    });
-                }
-                catch
-                {
-                    CurrentFrame = CreateRawFallback(frame);
-                }
-            }
-            var data = _processTelemetryUseCase.Execute(measurement);
-            LatestTelemetry = data;
-            
-            TelemetryHistory.Add(data);
-            if (TelemetryHistory.Count > 50)
-                TelemetryHistory.RemoveAt(0); 
+            DrainLatestMeasurement);
+    }
 
-            // Exposure limitleri telemetri değişince güncellenir
-            OnPropertyChanged(nameof(MaxExposureTime));
-            OnPropertyChanged(nameof(ExposureTimeIsValid));
-            OnPropertyChanged(nameof(ExposureValidationMessage));
-        });
+    private void DrainLatestMeasurement()
+    {
+        var pending = Interlocked.Exchange(ref _pendingLiveMeasurement, null);
+        Interlocked.Exchange(ref _liveDispatchScheduled, 0);
+
+        if (pending is not null)
+            ApplyMeasurement(pending.Measurement, pending.Generation, displayWhilePaused: false);
+
+        if (Volatile.Read(ref _pendingLiveMeasurement) is not null)
+            ScheduleLatestMeasurementDispatch();
+    }
+
+    private void DisplayMeasurement(XRayMeasurement measurement, bool displayWhilePaused)
+    {
+        var generation = Volatile.Read(ref _sessionGeneration);
+        System.Windows.Application.Current.Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            () => ApplyMeasurement(measurement, generation, displayWhilePaused));
+    }
+
+    private void ApplyMeasurement(XRayMeasurement measurement, int generation, bool displayWhilePaused)
+    {
+        if (generation != Volatile.Read(ref _sessionGeneration)) return;
+        if (IsPaused && !displayWhilePaused) return;
+
+        var frame = measurement.Frame;
+        if (frame is { Pixels.Length: > 0 })
+        {
+            SetRawSource(frame, frame.Kind == FrameKind.LivePreview
+                ? LiveWindowLevelKey
+                : FrozenWindowLevelKey);
+            try { CurrentFrame = CreateRawFallback(frame); } catch { /* malformed source remains unavailable */ }
+            try
+            {
+                _windowLevelRenderer.Submit(frame, WCenter, WWidth, bitmap =>
+                {
+                    if (generation == Volatile.Read(ref _sessionGeneration) && (!IsPaused || displayWhilePaused))
+                        CurrentFrame = bitmap;
+                });
+            }
+            catch
+            {
+                CurrentFrame = CreateRawFallback(frame);
+            }
+        }
+
+        var data = _processTelemetryUseCase.Execute(measurement);
+        LatestTelemetry = data;
+
+        TelemetryHistory.Add(data);
+        if (TelemetryHistory.Count > 50)
+            TelemetryHistory.RemoveAt(0);
+
+        OnPropertyChanged(nameof(MaxExposureTime));
+        OnPropertyChanged(nameof(ExposureTimeIsValid));
+        OnPropertyChanged(nameof(ExposureValidationMessage));
     }
 
     private void SetRawSource(RawGray16Frame frame, string key)
@@ -262,10 +300,13 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private bool CanWindowLevel() => _currentRawFrame is not null;
 
     [RelayCommand(CanExecute = nameof(CanWindowLevel))]
-    private void AutoWindowLevel()
+    private async Task AutoWindowLevelAsync()
     {
-        if (_currentRawFrame is null) return;
-        var auto = WindowLevelMapper.Auto(_currentRawFrame.Pixels);
+        var frame = _currentRawFrame;
+        if (frame is null) return;
+        var generation = Volatile.Read(ref _sessionGeneration);
+        var auto = await Task.Run(() => WindowLevelMapper.Auto(frame.Pixels));
+        if (!ReferenceEquals(frame, _currentRawFrame) || generation != Volatile.Read(ref _sessionGeneration)) return;
         WCenter = auto.Center;
         WWidth = auto.Width;
     }
@@ -277,38 +318,46 @@ public partial class LiveTelemetryViewModel : ObservableObject
         WWidth = 65535;
     }
 
-    private bool CanConnectAndStart() => !IsCapturing;
+    private bool CanConnectAndStart() => !IsCapturing && !IsConnecting;
     private bool CanStop() => IsCapturing || IsSnapping;
     private bool CanDisconnect() => DeviceStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString();
     private bool CanSnap() => DeviceStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString() && ExposureTimeIsValid && !IsSnapping;
+    private bool CanResumeLive() =>
+        IsPaused &&
+        DeviceStatus is nameof(XRaySystem.Domain.Entities.DeviceStatus.Connected) or
+            nameof(XRaySystem.Domain.Entities.DeviceStatus.Frozen);
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
     private bool _isSnapping = false;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ConnectAndStartCommand))]
     private bool _isConnecting = false;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ResumeLiveCommand))]
     private bool _isPaused = false;
 
     /// <summary>
     /// Kullanıcının girdiği tüp voltajı (kV).
     /// </summary>
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
     [NotifyPropertyChangedFor(nameof(MaxExposureTime))]
     [NotifyPropertyChangedFor(nameof(ExposureTimeIsValid))]
     [NotifyPropertyChangedFor(nameof(ExposureValidationMessage))]
     private double _userVoltage = 70.0;
 
     /// <summary>
-    /// Kullanıcının girdiği tüp akımı (mA).
+    /// Kullanıcının girdiği tüp gücü (Watt).
     /// </summary>
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
     [NotifyPropertyChangedFor(nameof(MaxExposureTime))]
     [NotifyPropertyChangedFor(nameof(ExposureTimeIsValid))]
     [NotifyPropertyChangedFor(nameof(ExposureValidationMessage))]
-    private double _userTubeCurrent = 50.0;
+    private double _userPowerW = 3500.0;
 
     /// <summary>
     /// Kullanıcının girdiği exposure süresi (ms).
@@ -321,15 +370,15 @@ public partial class LiveTelemetryViewModel : ObservableObject
 
     partial void OnUserVoltageChanged(double value)
     {
-        if (_sensorService is XRaySystem.Infrastructure.Sensors.MockXRaySensorService mock)
-            mock.TargetVoltage = value;
+        ApplyAcquisitionParametersIfValid();
     }
 
-    partial void OnUserTubeCurrentChanged(double value)
+    partial void OnUserPowerWChanged(double value)
     {
-        if (_sensorService is XRaySystem.Infrastructure.Sensors.MockXRaySensorService mock)
-            mock.TargetTubeCurrent = value;
+        ApplyAcquisitionParametersIfValid();
     }
+
+    partial void OnUserExposureTimeChanged(double value) => ApplyAcquisitionParametersIfValid();
 
     [ObservableProperty]
     private AcquisitionProfile _profile = AcquisitionProfile.IndustrialQaPhantom;
@@ -345,7 +394,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
     public double MinExposureTime => 1.0;
 
     /// <summary>
-    /// Max exposure süresi: Kullanıcı girdiği kV ve mA'ya bağlı hesaplanır.
+    /// Max exposure süresi: Kullanıcı girdiği kV ve Watt'a bağlı hesaplanır.
     /// Formül: MaxmAs = 150 - (kV - 40) * 0.8  (kV arttıkça mAs payı azalır)
     ///          MaxExposure = MaxmAs / mA * 1000
     ///          [1ms, 3000ms] arasında sınırlandırılır.
@@ -354,42 +403,59 @@ public partial class LiveTelemetryViewModel : ObservableObject
     {
         get
         {
-            double kv  = UserVoltage > 0 ? UserVoltage : 70.0;
-            double mA  = UserTubeCurrent > 0 ? UserTubeCurrent : 50.0;
+            if (!double.IsFinite(UserVoltage) || UserVoltage <= 0 ||
+                !double.IsFinite(UserPowerW) || UserPowerW <= 0)
+                return MinExposureTime;
+
+            double kv = UserVoltage;
+            double mA = UserPowerW / kv;
             double maxMAs = Math.Max(10, 150.0 - (kv - 40.0) * 0.8);
             double maxMs  = (maxMAs / mA) * 1000.0;
             return Math.Clamp(maxMs, 1.0, 3000.0);
         }
     }
 
-    public bool   ExposureTimeIsValid        => UserExposureTime >= MinExposureTime && UserExposureTime <= MaxExposureTime;
+    public bool ExposureTimeIsValid =>
+        double.IsFinite(UserVoltage) && UserVoltage > 0 &&
+        double.IsFinite(UserPowerW) && UserPowerW > 0 &&
+        double.IsFinite(UserExposureTime) &&
+        UserExposureTime >= MinExposureTime && UserExposureTime <= MaxExposureTime;
     public Visibility ExposureTimeErrorVisibility => ExposureTimeIsValid ? Visibility.Collapsed : Visibility.Visible;
     public string ExposureValidationMessage   => ExposureTimeIsValid
         ? $"Geçerli aralık: {MinExposureTime:F0}–{MaxExposureTime:F0} ms"
-        : $"⚠ Geçersiz! Aralık: {MinExposureTime:F0}–{MaxExposureTime:F0} ms";
+        : $"⚠ kV/Watt pozitif olmalı; süre: {MinExposureTime:F0}–{MaxExposureTime:F0} ms";
+
+    private void ApplyAcquisitionParametersIfValid()
+    {
+        var parameters = new AcquisitionParameters(UserVoltage, UserPowerW, UserExposureTime);
+        if (parameters.IsValid)
+            _sensorService.Parameters = parameters;
+    }
 
     [RelayCommand(CanExecute = nameof(CanSnap))]
     private async Task SnapAsync()
     {
         var snapGeneration = Interlocked.Increment(ref _sessionGeneration);
+        string? savedImagePath = null;
         _windowLevelRenderer.Invalidate();
         try
         {
             IsSnapping = true;
             _sensorService.Profile = Profile;
+            ApplyAcquisitionParametersIfValid();
 
             // Adım 1: Sensörden görüntü al (exposure time kadar bekler)
             var measurement = await _snapMeasurementUseCase.ExecuteAsync(UserExposureTime);
 
             // Publish the immutable snap immediately; persistence must not affect Frozen UI.
             IsPaused = true;
-            OnMeasurementReceived(measurement, displayWhilePaused: true);
+            DisplayMeasurement(measurement, displayWhilePaused: true);
             ImageStatusBadgeText = $"📸 SNAP DONDURULDU ({measurement.Frame!.Width}x{measurement.Frame.Height})";
             ImageStatusBadgeColor = "#FF9500";
 
             // Adım 2: Dosya adını oluştur (image_Voltage_Current_Exposure_Date.tiff)
             var fileName = $"image_{measurement.Readings.Voltage:F0}kV" +
-                           $"_{measurement.Readings.TubeCurrent:F0}mA" +
+                           $"_{measurement.Readings.Voltage * measurement.Readings.TubeCurrent:F0}W" +
                            $"_{measurement.Readings.ExposureTime:F0}ms" +
                            $"_{measurement.Frame!.AcquisitionId:N}_{measurement.Frame.Timestamp:yyyyMMdd_HHmmssfff}.tiff";
 
@@ -407,6 +473,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
             // Adım 3b: TIFF dosyasını background thread'de kaydet (yalnızca dosya I/O)
             string imagePath = await Task.Run(() =>
                 _imageStorageService.SaveTiff(snapBitmap, fileName));
+            savedImagePath = imagePath;
 
             // Adım 4: Dosya yolunu entity'e yaz
             measurement.SetImagePath(imagePath);
@@ -421,7 +488,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
             {
                 Id = measurement.Id,
                 Timestamp = measurement.Timestamp.ToLocalTime(),
-                TubeCurrent = measurement.Readings.TubeCurrent,
+                PowerW = measurement.Readings.Voltage * measurement.Readings.TubeCurrent,
                 Voltage = measurement.Readings.Voltage,
                 XRayIntensity = measurement.Readings.XRayIntensity,
                 ExposureTime = measurement.Readings.ExposureTime,
@@ -436,7 +503,10 @@ public partial class LiveTelemetryViewModel : ObservableObject
         catch (Exception ex)
         {
             // The captured frame remains visible even when TIFF/DB readiness or persistence fails.
-            System.Windows.MessageBox.Show(ex.Message, "Snap Hatası");
+            var preservedFileMessage = savedImagePath is not null && File.Exists(savedImagePath)
+                ? $"\n\nTIFF dosyası korundu ancak metadata kaydı tamamlanamamış olabilir:\n{savedImagePath}"
+                : string.Empty;
+            System.Windows.MessageBox.Show($"{ex.Message}{preservedFileMessage}", "Snap Hatası");
         }
         finally
         {
@@ -478,7 +548,8 @@ public partial class LiveTelemetryViewModel : ObservableObject
         bitmap.CopyPixels(bytes, stride, 0);
         var pixels = new ushort[bitmap.PixelWidth * bitmap.PixelHeight];
         Buffer.BlockCopy(bytes, 0, pixels, 0, bytes.Length);
-        var settings = new AcquisitionSettings(item.TubeCurrent, item.Voltage, item.ExposureTime, item.Profile);
+        var tubeCurrentMa = item.Voltage > 0 ? item.PowerW / item.Voltage : 0;
+        var settings = new AcquisitionSettings(tubeCurrentMa, item.Voltage, item.ExposureTime, item.Profile);
         var frame = new RawGray16Frame(pixels, bitmap.PixelWidth, bitmap.PixelHeight, stride,
             Gray16PixelFormat.Gray16LittleEndian, FrameKind.Snap, item.Timestamp, item.Id, settings, "history-tiff");
         SetRawSource(frame, $"history:{(item.Id != Guid.Empty ? item.Id.ToString("N") : Path.GetFullPath(path))}");
@@ -492,7 +563,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
         });
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanResumeLive))]
     private async Task ResumeLiveAsync()
     {
         Interlocked.Increment(ref _sessionGeneration);

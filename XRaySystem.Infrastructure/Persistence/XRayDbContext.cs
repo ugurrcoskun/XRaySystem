@@ -7,8 +7,14 @@ public class XRayDbContext : DbContext
 {
     public DbSet<XRayMeasurement> Measurements { get; set; }
 
+    public XRayDbContext() { }
+
+    public XRayDbContext(DbContextOptions<XRayDbContext> options) : base(options) { }
+
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
+        if (optionsBuilder.IsConfigured) return;
+
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var dirPath = System.IO.Path.Combine(appData, "XRaySystem");
         System.IO.Directory.CreateDirectory(dirPath);

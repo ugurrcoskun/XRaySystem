@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+
+    <Style TargetType="ContentPage">
+        <Setter Property="BackgroundColor" Value="{StaticResource PageBackground}" />
+    </Style>
+
+    <Style TargetType="Label">
+        <Setter Property="TextColor" Value="{StaticResource TextPrimary}" />
+        <Setter Property="FontFamily" Value="OpenSansRegular" />
+        <Setter Property="FontSize" Value="14" />
+    </Style>
+
+    <Style x:Key="BaseButtonStyle" TargetType="Button">
+        <Setter Property="BackgroundColor" Value="{StaticResource SurfaceElevated}" />
+        <Setter Property="TextColor" Value="{StaticResource TextPrimary}" />
+        <Setter Property="BorderColor" Value="{StaticResource Stroke}" />
+        <Setter Property="BorderWidth" Value="1" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="FontFamily" Value="OpenSansSemibold" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="CharacterSpacing" Value="0.4" />
+        <Setter Property="Padding" Value="14,11" />
+        <Setter Property="MinimumHeightRequest" Value="46" />
+        <Setter Property="VisualStateManager.VisualStateGroups">
+            <VisualStateGroupList>
+                <VisualStateGroup x:Name="CommonStates">
+                    <VisualState x:Name="Normal" />
+                    <VisualState x:Name="PointerOver">
+                        <VisualState.Setters>
+                            <Setter Property="BorderColor" Value="{StaticResource Primary}" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="Pressed">
+                        <VisualState.Setters>
+                            <Setter Property="Opacity" Value="0.78" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="Disabled">
+                        <VisualState.Setters>
+                            <Setter Property="Opacity" Value="0.38" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateGroupList>
+        </Setter>
+    </Style>
+
+    <Style TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}" />
+
+    <Style TargetType="Entry">
+        <Setter Property="BackgroundColor" Value="{StaticResource FieldBackground}" />
+        <Setter Property="TextColor" Value="{StaticResource TextPrimary}" />
+        <Setter Property="PlaceholderColor" Value="{StaticResource TextMuted}" />
+        <Setter Property="FontFamily" Value="OpenSansSemibold" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="MinimumHeightRequest" Value="48" />
+        <Setter Property="Margin" Value="0" />
+    </Style>
+
+    <Style TargetType="Picker">
+        <Setter Property="BackgroundColor" Value="{StaticResource FieldBackground}" />
+        <Setter Property="TextColor" Value="{StaticResource TextPrimary}" />
+        <Setter Property="TitleColor" Value="{StaticResource TextMuted}" />
+        <Setter Property="FontFamily" Value="OpenSansSemibold" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="MinimumHeightRequest" Value="48" />
+    </Style>
+
+    <Style TargetType="Slider">
+        <Setter Property="MinimumTrackColor" Value="{StaticResource Primary}" />
+        <Setter Property="MaximumTrackColor" Value="{StaticResource Stroke}" />
+        <Setter Property="ThumbColor" Value="{StaticResource PrimaryBright}" />
+    </Style>
+
+    <Style TargetType="ActivityIndicator">
+        <Setter Property="Color" Value="{StaticResource Primary}" />
+    </Style>
+
+    <Style x:Key="CardStyle" TargetType="Border">
+        <Setter Property="BackgroundColor" Value="{StaticResource Surface}" />
+        <Setter Property="Stroke" Value="{StaticResource Stroke}" />
+        <Setter Property="StrokeThickness" Value="1" />
+        <Setter Property="StrokeShape" Value="RoundRectangle 18" />
+        <Setter Property="Padding" Value="18" />
+    </Style>
+
+    <Style x:Key="SoftCardStyle" TargetType="Border" BasedOn="{StaticResource CardStyle}">
+        <Setter Property="BackgroundColor" Value="{StaticResource SurfaceSoft}" />
+        <Setter Property="StrokeShape" Value="RoundRectangle 14" />
+        <Setter Property="Padding" Value="14" />
+    </Style>
+
+    <Style x:Key="EyebrowLabelStyle" TargetType="Label">
+        <Setter Property="TextColor" Value="{StaticResource Primary}" />
+        <Setter Property="FontFamily" Value="OpenSansSemibold" />
+        <Setter Property="FontSize" Value="10" />
+        <Setter Property="CharacterSpacing" Value="1.7" />
+    </Style>
+
+    <Style x:Key="SectionTitleStyle" TargetType="Label">
+        <Setter Property="TextColor" Value="{StaticResource TextPrimary}" />
+        <Setter Property="FontFamily" Value="OpenSansSemibold" />
+        <Setter Property="FontSize" Value="17" />
+    </Style>
+
+    <Style x:Key="CaptionLabelStyle" TargetType="Label">
+        <Setter Property="TextColor" Value="{StaticResource TextMuted}" />
+        <Setter Property="FontFamily" Value="OpenSansSemibold" />
+        <Setter Property="FontSize" Value="10" />
+        <Setter Property="CharacterSpacing" Value="0.8" />
+    </Style>
+
+    <Style x:Key="MetricValueStyle" TargetType="Label">
+        <Setter Property="TextColor" Value="{StaticResource TextPrimary}" />
+        <Setter Property="FontFamily" Value="OpenSansSemibold" />
+        <Setter Property="FontSize" Value="24" />
+    </Style>
+
+    <Style x:Key="PrimaryActionButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
+        <Setter Property="BackgroundColor" Value="{StaticResource Primary}" />
+        <Setter Property="TextColor" Value="{StaticResource PrimaryDarkText}" />
+        <Setter Property="BorderColor" Value="{StaticResource Primary}" />
+    </Style>
+
+    <Style x:Key="SuccessActionButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
+        <Setter Property="BackgroundColor" Value="#163A27" />
+        <Setter Property="TextColor" Value="{StaticResource Success}" />
+        <Setter Property="BorderColor" Value="#285F3C" />
+    </Style>
+
+    <Style x:Key="DangerActionButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
+        <Setter Property="BackgroundColor" Value="#351720" />
+        <Setter Property="TextColor" Value="{StaticResource Danger}" />
+        <Setter Property="BorderColor" Value="#652634" />
+    </Style>
+
+    <Style x:Key="SnapActionButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
+        <Setter Property="BackgroundColor" Value="{StaticResource Warning}" />
+        <Setter Property="TextColor" Value="#171006" />
+        <Setter Property="BorderColor" Value="{StaticResource Warning}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="MinimumHeightRequest" Value="54" />
+    </Style>
+</ResourceDictionary>

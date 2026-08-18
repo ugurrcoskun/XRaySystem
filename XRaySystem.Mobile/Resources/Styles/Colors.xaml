@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+
+    <!-- XRaySystem ortak koyu arayüz paleti -->
+    <Color x:Key="PageBackground">#070B14</Color>
+    <Color x:Key="Surface">#101827</Color>
+    <Color x:Key="SurfaceElevated">#151F32</Color>
+    <Color x:Key="SurfaceSoft">#0D1422</Color>
+    <Color x:Key="FieldBackground">#0A111E</Color>
+    <Color x:Key="ViewerBackground">#02040A</Color>
+    <Color x:Key="Stroke">#25344D</Color>
+    <Color x:Key="StrokeStrong">#38506F</Color>
+
+    <Color x:Key="Primary">#00E5FF</Color>
+    <Color x:Key="PrimaryBright">#5CFFFF</Color>
+    <Color x:Key="PrimaryDark">#007E91</Color>
+    <Color x:Key="PrimarySoft">#123844</Color>
+    <Color x:Key="Success">#32D74B</Color>
+    <Color x:Key="Warning">#FFB020</Color>
+    <Color x:Key="Danger">#FF4D5E</Color>
+
+    <Color x:Key="TextPrimary">#F5F8FF</Color>
+    <Color x:Key="TextSecondary">#A7B6C9</Color>
+    <Color x:Key="TextMuted">#667991</Color>
+    <Color x:Key="White">#FFFFFF</Color>
+    <Color x:Key="Black">#000000</Color>
+
+    <!-- MAUI platform şablonlarının beklediği uyumluluk anahtarları -->
+    <Color x:Key="PrimaryDarkText">#071018</Color>
+    <Color x:Key="Secondary">#173E4A</Color>
+    <Color x:Key="SecondaryDarkText">#8BEFFF</Color>
+    <Color x:Key="Tertiary">#1B6C7A</Color>
+    <Color x:Key="Magenta">#D600AA</Color>
+    <Color x:Key="MidnightBlue">#070B14</Color>
+    <Color x:Key="OffBlack">#101827</Color>
+    <Color x:Key="Gray100">#E4EBF4</Color>
+    <Color x:Key="Gray200">#C0CCDA</Color>
+    <Color x:Key="Gray300">#9AA9BC</Color>
+    <Color x:Key="Gray400">#77889E</Color>
+    <Color x:Key="Gray500">#5B6D84</Color>
+    <Color x:Key="Gray600">#384960</Color>
+    <Color x:Key="Gray900">#111827</Color>
+    <Color x:Key="Gray950">#070B14</Color>
+
+    <SolidColorBrush x:Key="PrimaryBrush" Color="{StaticResource Primary}" />
+    <SolidColorBrush x:Key="SecondaryBrush" Color="{StaticResource Secondary}" />
+    <SolidColorBrush x:Key="TertiaryBrush" Color="{StaticResource Tertiary}" />
+    <SolidColorBrush x:Key="WhiteBrush" Color="{StaticResource White}" />
+    <SolidColorBrush x:Key="BlackBrush" Color="{StaticResource Black}" />
+    <SolidColorBrush x:Key="Gray100Brush" Color="{StaticResource Gray100}" />
+    <SolidColorBrush x:Key="Gray200Brush" Color="{StaticResource Gray200}" />
+    <SolidColorBrush x:Key="Gray300Brush" Color="{StaticResource Gray300}" />
+    <SolidColorBrush x:Key="Gray400Brush" Color="{StaticResource Gray400}" />
+    <SolidColorBrush x:Key="Gray500Brush" Color="{StaticResource Gray500}" />
+    <SolidColorBrush x:Key="Gray600Brush" Color="{StaticResource Gray600}" />
+    <SolidColorBrush x:Key="Gray900Brush" Color="{StaticResource Gray900}" />
+    <SolidColorBrush x:Key="Gray950Brush" Color="{StaticResource Gray950}" />
+</ResourceDictionary>

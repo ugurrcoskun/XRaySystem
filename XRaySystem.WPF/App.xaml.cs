@@ -1,8 +1,6 @@
 using System.Windows;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Data.Sqlite;
 using System;
-using System.Collections.Generic;
 using Microsoft.Extensions.DependencyInjection;
 using XRaySystem.Application.UseCases;
 using XRaySystem.Domain.Interfaces;
@@ -17,7 +15,7 @@ namespace XRaySystem.WPF
 {
     public partial class App : System.Windows.Application
     {
-        public static ServiceProvider ServiceProvider { get; private set; }
+        public static ServiceProvider ServiceProvider { get; private set; } = null!;
         public static Task DatabaseReady { get; private set; } = Task.CompletedTask;
         public static Exception? DatabaseInitializationFailure { get; private set; }
 
@@ -42,7 +40,7 @@ namespace XRaySystem.WPF
 
                 ServiceProvider = serviceCollection.BuildServiceProvider();
 
-                // Veritabanını senkron olarak oluştur (Açılışta tabloların 100% hazır olmasını sağla)
+                // Migration'ları pencere açılmadan uygula; eski veritabanları veri kaybetmeden baseline edilir.
                 InitializeDatabase();
 
                 // Dependency Injection üzerinden ana pencereyi ayağa kaldır
@@ -61,36 +59,13 @@ namespace XRaySystem.WPF
             {
                 using var scope = ServiceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<XRayDbContext>();
-                db.Database.EnsureCreated();
-                UpgradeSchema(db);
+                LegacyDatabaseBaseliner.Prepare(db);
+                db.Database.Migrate();
             }
             catch (Exception ex)
             {
                 DatabaseInitializationFailure = ex;
                 MessageBox.Show($"Database initialization failed:\n{ex.Message}", "Database", MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
-        }
-
-        private static void UpgradeSchema(XRayDbContext db)
-        {
-            var connection = db.Database.GetDbConnection();
-            connection.Open();
-            using var info = connection.CreateCommand();
-            info.CommandText = "PRAGMA table_info('Measurements');";
-            var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            using (var reader = info.ExecuteReader())
-                while (reader.Read()) columns.Add(reader.GetString(1));
-
-            foreach (var (name, definition) in new[] {
-                ("ImagePath", "TEXT"), ("Profile", "INTEGER NOT NULL DEFAULT 0"),
-                ("IsSimulator", "INTEGER NOT NULL DEFAULT 0") })
-            {
-                if (columns.Contains(name)) continue;
-                using var command = connection.CreateCommand();
-                command.CommandText = $"ALTER TABLE Measurements ADD COLUMN {name} {definition};";
-                try { command.ExecuteNonQuery(); }
-                catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
-                    ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase)) { }
             }
         }
 

@@ -13,12 +13,20 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\XRaySystem.Application\XRaySystem.Application.csproj" />
     <ProjectReference Include="..\XRaySystem.Domain\XRaySystem.Domain.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.0" />
+    <!-- CVE-2025-6965: EF Core 8'in eski native SQLite bağımlılığını güvenli sürüme sabitler. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <!-- EF Core 8'in eski geçişli paketlerindeki yüksek önem dereceli advisory yamaları. -->
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.1" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
 
 </Project>

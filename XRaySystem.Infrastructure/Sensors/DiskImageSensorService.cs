@@ -84,7 +84,7 @@ public sealed class DiskImageSensorService : ISensorService, IDisposable
             if (_currentStatus != value)
             {
                 _currentStatus = value;
-                StatusChanged?.Invoke(_currentStatus);
+                PublishStatus(_currentStatus);
             }
         }
     }
@@ -92,6 +92,16 @@ public sealed class DiskImageSensorService : ISensorService, IDisposable
     public event Action<DeviceStatus>? StatusChanged;
     public event Action<XRayMeasurement>? MeasurementReceived;
     public AcquisitionProfile Profile { get; set; } = AcquisitionProfile.IndustrialQaPhantom;
+    private AcquisitionParameters _parameters = new(70.0, 3500.0, 500.0);
+    public AcquisitionParameters Parameters
+    {
+        get => Volatile.Read(ref _parameters);
+        set
+        {
+            value.EnsureValid();
+            Volatile.Write(ref _parameters, value);
+        }
+    }
 
     // ── Ctor ──────────────────────────────────────────────────────────────────
     public DiskImageSensorService(string? sampleDataPath = null)
@@ -279,9 +289,10 @@ public sealed class DiskImageSensorService : ISensorService, IDisposable
             // Gerçek DICOM'dan piksel yükle
             var pixels = LoadSnapPixels(snapCts.Token);
 
+            var parameters = Parameters;
             var readings = new SensorReadings(
-                TubeCurrent:  Math.Round(50.0 + _random.NextDouble() * 5,   2),
-                Voltage:      Math.Round(70.0 + _random.NextDouble() * 30.0, 1),
+                TubeCurrent:  Math.Round(parameters.TubeCurrentMa + (_random.NextDouble() - 0.5) * 0.2, 2),
+                Voltage:      Math.Round(parameters.VoltageKv + (_random.NextDouble() - 0.5) * 0.4, 1),
                 XRayIntensity: _random.Next(2000, 3000),
                 ExposureTime: exposureTime
             );
@@ -342,9 +353,10 @@ public sealed class DiskImageSensorService : ISensorService, IDisposable
             while (!token.IsCancellationRequested)
             {
                 double liveExposure = 33.0;
+                var parameters = Parameters;
                 var readings = new SensorReadings(
-                    TubeCurrent:   Math.Round(20.0 + _random.NextDouble() * 10,  2),
-                    Voltage:       Math.Round(40.0 + _random.NextDouble() * 20.0, 1),
+                    TubeCurrent:   Math.Round(parameters.TubeCurrentMa + (_random.NextDouble() - 0.5) * 0.3, 2),
+                    Voltage:       Math.Round(parameters.VoltageKv + (_random.NextDouble() - 0.5) * 0.6, 1),
                     XRayIntensity: _random.Next(800, 1200),
                     ExposureTime:  liveExposure
                 );
@@ -369,7 +381,11 @@ public sealed class DiskImageSensorService : ISensorService, IDisposable
                 var measurement = new XRayMeasurement(readings, frame, isSimulator: false);
                 if (token.IsCancellationRequested || generation != Volatile.Read(ref _producerGeneration))
                     break;
-                MeasurementReceived?.Invoke(measurement);
+                if (!PublishMeasurement(measurement))
+                {
+                    CurrentStatus = DeviceStatus.Error;
+                    break;
+                }
 
                 // 2 FPS
                 await Task.Delay(500, token);
@@ -549,6 +565,32 @@ public sealed class DiskImageSensorService : ISensorService, IDisposable
         string.Equals(modality, "CT", StringComparison.OrdinalIgnoreCase)
             ? nameof(AcquisitionProfile.MedicalSpecimenLikePhantom)
             : "unmapped-domain-profile"; // CR/DX have no distinct domain enum; retain Profile.
+
+    private void PublishStatus(DeviceStatus status)
+    {
+        if (StatusChanged is not { } handlers) return;
+        foreach (Action<DeviceStatus> handler in handlers.GetInvocationList())
+        {
+            try { handler(status); }
+            catch (Exception ex) { Diagnostic($"Status handler error: {ex.Message}"); }
+        }
+    }
+
+    private bool PublishMeasurement(XRayMeasurement measurement)
+    {
+        if (MeasurementReceived is not { } handlers) return true;
+        var succeeded = true;
+        foreach (Action<XRayMeasurement> handler in handlers.GetInvocationList())
+        {
+            try { handler(measurement); }
+            catch (Exception ex)
+            {
+                succeeded = false;
+                Diagnostic($"Measurement handler error: {ex.Message}");
+            }
+        }
+        return succeeded;
+    }
 
     private void Diagnostic(string message)
     {

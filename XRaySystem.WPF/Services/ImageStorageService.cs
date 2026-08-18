@@ -20,10 +20,17 @@ public class ImageStorageService : IImageStorageService
 {
     private readonly string _baseFolder;
 
-    public ImageStorageService()
+    public ImageStorageService() : this(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "XRaySystem",
+        "Images"))
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        _baseFolder = Path.Combine(appData, "XRaySystem", "Images");
+    }
+
+    internal ImageStorageService(string baseFolder)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseFolder);
+        _baseFolder = Path.GetFullPath(baseFolder);
         Directory.CreateDirectory(_baseFolder);
     }
 
@@ -46,8 +53,29 @@ public class ImageStorageService : IImageStorageService
         var encoder = new TiffBitmapEncoder { Compression = TiffCompressOption.None };
         encoder.Frames.Add(BitmapFrame.Create(frozenBitmap));
 
-        using var stream = new FileStream(fullPath, FileMode.Create, FileAccess.Write);
-        encoder.Save(stream);
+        var temporaryPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 1024 * 1024,
+                FileOptions.WriteThrough))
+            {
+                encoder.Save(stream);
+                stream.Flush(flushToDisk: true);
+            }
+
+            // Aynı klasördeki move, yarım TIFF'in nihai adla görünmesini engeller.
+            File.Move(temporaryPath, fullPath);
+        }
+        catch
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            throw;
+        }
 
         return fullPath;
     }

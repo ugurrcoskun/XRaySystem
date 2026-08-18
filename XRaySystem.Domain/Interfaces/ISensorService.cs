@@ -16,6 +16,7 @@ public interface ISensorService
     // Yeni bir veri okunduğunda fırlatılacak olay
     event Action<XRayMeasurement>? MeasurementReceived;
     AcquisitionProfile Profile { get; set; }
+    AcquisitionParameters Parameters { get; set; }
 
     Task ConnectAsync();
     Task DisconnectAsync();

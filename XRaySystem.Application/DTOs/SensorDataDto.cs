@@ -7,7 +7,7 @@ public class SensorDataDto
 {
     public Guid Id { get; set; }
     public DateTime Timestamp { get; set; }
-    public double TubeCurrent { get; set; }
+    public double PowerW { get; set; }
     public double Voltage { get; set; }
     public double XRayIntensity { get; set; }
     public double ExposureTime { get; set; }
