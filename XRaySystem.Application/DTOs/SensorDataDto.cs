@@ -15,4 +15,5 @@ public class SensorDataDto
     public AcquisitionProfile Profile { get; set; }
     public bool IsSimulator { get; set; }
     public string? ImagePath { get; set; }
+    public string? RawImagePath { get; set; }
 }

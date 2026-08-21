@@ -7,10 +7,32 @@ XRaySystem, CMOS X-Ray dedektör görüntüsü ve telemetri akışını gerçek 
 - `XRaySystem.Domain`: sensörden bağımsız modeller ve arayüzler.
 - `XRaySystem.Application`: use case ve DTO katmanı.
 - `XRaySystem.Infrastructure`: mock/disk sensörleri, SQLite ve sample data.
+- `XRaySystem.Contracts`: local dosya yolundan bağımsız REST/binary ağ sözleşmeleri.
+- `XRaySystem.DeviceHost`: mock sensörün tek sahibi olan geliştirme amaçlı ASP.NET Core host.
+- `XRaySystem.RemoteClient`: WPF ve MAUI için ortak REST + SignalR DeviceHost istemcisi.
 - `XRaySystem.WPF`: Windows masaüstü istemcisi.
-- `XRaySystem.Mobile`: .NET MAUI standalone mobil prototipi.
+- `XRaySystem.Mobile`: Local mock veya Remote DeviceHost modunda çalışan .NET MAUI istemcisi.
 
 Mimari ayrıntılar için `project.md`, uygulama sırası için `plan.md` kullanılmalıdır.
+
+Mobil snap kayıtları iki temsilden oluşur: hızlı listeleme için BMP önizleme ve asıl görüntü kaynağı olarak metadata ile SHA-256 bütünlük doğrulaması taşıyan sürümlü `.xrayraw` Gray16 dosyası. Mobil SQLite veritabanı ve görüntüler `FileSystem.AppDataDirectory` altında tutulur; WPF'nin kalıcı TIFF/SQLite geçmişiyle karışmaz.
+
+Kaynağı, lisansı ve anonimleştirmesi doğrulanmamış `Infrastructure/SampleData` içeriği karantinadadır ve varsayılan WPF build/publish çıktısına alınmaz. Kontrollü geliştirme opt-in'i yalnız RAW + manifest içindir; DICOM kaynakları uygulama paketine hiçbir durumda kopyalanmaz.
+
+GitHub Actions CI, Linux üzerinde çekirdek testleri ve Windows üzerinde WPF derleme/Gray16 TIFF testini ayrı işler olarak çalıştırır. MAUI işi ilk temiz Android runtime doğrulamasından sonra eklenecektir; böylece henüz doğrulanmamış workload kurulumu CI sonucunu gizlemez.
+
+DeviceHost; REST cihaz komutları, SignalR status/telemetry olayları, sınırlı bellek içi remote geçmiş, 768 px low BMP ve on-demand `.xrayraw` binary indirme sağlar. Production HTTPS zorlaması, API-key authentication, Viewer/Operator/Admin rol politikaları, doğrulanmış kimliğe bağlı command audit, idempotency ve tek aktif istemci lease'i eklenmiştir. Ayrıntılar `XRaySystem.DeviceHost/README.md` içindedir.
+
+`XRaySystem.RemoteClient`, status/telemetry olaylarını dinler, sequence tabanlı en güncel live BMP'yi indirir ve SNAP low/raw içeriklerini content-type doğrulamasıyla alır. `RemoteSensorService` bu hattı ortak `ISensorService` sözleşmesine uyarlar; böylece WPF ve MAUI aynı ViewModel/use case yapısıyla Local veya Remote çalışabilir. Gerçek uçtan uca kontrol `Tools/RemoteSmoke` ile yapılır.
+
+## Local / Remote çalışma modu
+
+- Varsayılan mod `Local`dır ve uygulama doğrudan `MockXRaySensorService` kullanır.
+- Mobil uygulamada **Device Link > Çalışma Modu** alanından `Yerel mock` veya `DeviceHost (remote)` seçilir. Ayar kaydedildikten sonra uygulama kapatılıp yeniden açılır.
+- Android Emulator için varsayılan DeviceHost adresi `http://10.0.2.2:5088`, Windows Machine/iOS/MacCatalyst için `http://127.0.0.1:5088` değeridir.
+- WPF için Visual Studio çalıştırma profilinde `XRaySystem.WPF - Local Mock` veya `XRaySystem.WPF - Remote DeviceHost` seçilir; terminal komutu gerekmez.
+- Remote moddan önce `XRaySystem.DeviceHost - HTTP` profiliyle DeviceHost çalıştırılmalıdır. HTTP cleartext erişimi Android'de yalnız Debug derlemesinde açıktır; Release/üretim için TLS zorunludur.
+- Production remote bağlantısında WPF/MAUI istemcisine anahtar `XRAYSYSTEM_DEVICEHOST_API_KEY` ortam değişkeniyle verilir. Yerel Development mock profilinde anahtar gerekmez.
 
 ## Geliştirme Ortamları
 
@@ -58,6 +80,8 @@ dotnet run --project XRaySystem.Mobile/XRaySystem.Mobile.csproj -f net10.0-macca
 
 Mobil dashboard telefon genişliğinde dikey, 900 piksel ve üzerindeki pencere genişliğinde iki kolonlu çalışır. Runtime smoke testinde connect/live/stop/snap, Window/Level, yerel geçmiş ve ekran döndürme/yeniden boyutlandırma birlikte doğrulanmalıdır.
 
+Terminal komutu gerektirmeyen Windows Machine/Android Emulator hedef seçimi ve adım adım doğrulama için `Docs/Mobile_Smoke_Test.md` kullanılmalıdır.
+
 MAUI XAML veya üretilmiş `InitializeComponent` hatasından sonra eski SourceGen çıktısını temizlemek için:
 
 ```bash
@@ -99,6 +123,7 @@ Her önemli WPF değişikliğinde şu smoke test uygulanmalıdır:
 9. Dört görüntü karşılaştırması açılır ve senkron zoom/pan çalışır.
 10. Pencere 1050 piksel altına indirildiğinde ana görüntü görünür kalır.
 11. Explorer'da gösterme ve TIFF dışa aktarma çalışır.
+12. `XRaySystem.WPF - Remote DeviceHost` profiliyle aynı connect/live/stop/SNAP akışı DeviceHost üzerinden çalışır.
 
 ## Yerel veriler
 
@@ -110,8 +135,8 @@ WPF çalışma zamanı verileri Windows'ta şu dizinde tutulur:
 └── Images\
 ```
 
-Bu veriler, `bin/obj`, IDE dosyaları ve kullanıcıya özel ayarlar Git'e eklenmemelidir. Buna karşılık `README.md`, `project.md`, `plan.md` ve `Docs/` altındaki proje belgeleri sürüm kontrolünde tutulmalıdır.
+Bu veriler, `bin/obj`, IDE dosyaları ve kullanıcıya özel ayarlar Git'e eklenmemelidir. `Docs/`, `plan.md` ve `project.md` kullanıcı tercihiyle yerel tutulur ve mevcut `.gitignore` kararı değiştirilmez.
 
 ## Sample data uyarısı
 
-`XRaySystem.Infrastructure/SampleData` altındaki DICOM/RAW verileri yalnızca simülasyon içindir. Kaynak, lisans ve de-identification bilgileri doğrulanmadan yeni DICOM dosyaları depoya eklenmemelidir.
+`XRaySystem.Infrastructure/SampleData` altındaki DICOM/RAW verileri yalnızca simülasyon içindir. Mevcut örneklerin kaynak, lisans ve anonimleştirme durumu doğrulanmış değildir; ayrıntılı risk ve hash envanteri için `XRaySystem.Infrastructure/SampleData/README.md` okunmalıdır.

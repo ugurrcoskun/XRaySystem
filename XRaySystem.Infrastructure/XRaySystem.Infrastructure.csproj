@@ -7,7 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Folder Include="Cloud\" />
     <Folder Include="Persistence\" />
     <Folder Include="Sensors\" />
   </ItemGroup>

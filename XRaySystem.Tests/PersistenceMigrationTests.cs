@@ -6,6 +6,8 @@ namespace XRaySystem.Tests;
 
 public sealed class PersistenceMigrationTests
 {
+    private const string RawImageMigrationId = "20260819000000_AddRawImagePath";
+
     [Fact]
     public async Task Fresh_database_is_created_by_initial_migration()
     {
@@ -16,6 +18,7 @@ public sealed class PersistenceMigrationTests
             await db.Database.MigrateAsync();
 
             Assert.Contains(LegacyDatabaseBaseliner.InitialMigrationId, await db.Database.GetAppliedMigrationsAsync());
+            Assert.Contains(RawImageMigrationId, await db.Database.GetAppliedMigrationsAsync());
             Assert.Equal(0, await db.Measurements.CountAsync());
         });
     }
@@ -32,6 +35,7 @@ public sealed class PersistenceMigrationTests
             await db.Database.MigrateAsync();
 
             Assert.Contains(LegacyDatabaseBaseliner.InitialMigrationId, await db.Database.GetAppliedMigrationsAsync());
+            Assert.Contains(RawImageMigrationId, await db.Database.GetAppliedMigrationsAsync());
             Assert.Equal(1, await db.Measurements.CountAsync());
 
             await using var verify = new SqliteConnection($"Data Source={path}");
@@ -39,8 +43,8 @@ public sealed class PersistenceMigrationTests
             var command = verify.CreateCommand();
             command.CommandText =
                 "SELECT COUNT(*) FROM pragma_table_info('Measurements') " +
-                "WHERE name IN ('ImagePath', 'Profile', 'IsSimulator');";
-            Assert.Equal(3L, (long)(await command.ExecuteScalarAsync())!);
+                "WHERE name IN ('ImagePath', 'RawImagePath', 'Profile', 'IsSimulator');";
+            Assert.Equal(4L, (long)(await command.ExecuteScalarAsync())!);
         });
     }
 

@@ -1,8 +1,14 @@
 <Solution>
+  <Project Path="Tools/RemoteSmoke/XRaySystem.RemoteSmoke.csproj" />
   <Project Path="XRaySystem.Application/XRaySystem.Application.csproj" />
+  <Project Path="XRaySystem.Contracts/XRaySystem.Contracts.csproj" />
+  <Project Path="XRaySystem.DeviceHost/XRaySystem.DeviceHost.csproj" />
   <Project Path="XRaySystem.Domain/XRaySystem.Domain.csproj" />
   <Project Path="XRaySystem.Infrastructure/XRaySystem.Infrastructure.csproj" />
-  <Project Path="XRaySystem.Mobile/XRaySystem.Mobile.csproj" Id="3a3ee7e4-5721-4093-8635-c47371fb2768" />
+  <Project Path="XRaySystem.Mobile/XRaySystem.Mobile.csproj" Id="3a3ee7e4-5721-4093-8635-c47371fb2768">
+    <Deploy Solution="Debug|*" />
+  </Project>
+  <Project Path="XRaySystem.RemoteClient/XRaySystem.RemoteClient.csproj" />
   <Project Path="XRaySystem.Tests/XRaySystem.Tests.csproj" />
   <Project Path="XRaySystem.WPF.Tests/XRaySystem.WPF.Tests.csproj" />
   <Project Path="XRaySystem.WPF/XRaySystem.WPF.csproj" />

@@ -2,7 +2,9 @@
 
 	<PropertyGroup>
 		<TargetFrameworks>net10.0-android</TargetFrameworks>
-		<TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('linux'))">$(TargetFrameworks);net10.0-ios;net10.0-maccatalyst</TargetFrameworks>
+		<!-- iOS ve MacCatalyst yalnızca Mac geliştirme ortamında hedeflenir. -->
+		<TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('osx'))">$(TargetFrameworks);net10.0-ios;net10.0-maccatalyst</TargetFrameworks>
+		<!-- Windows VM'de çözüm derlemesi iOS simulator hedefini yanlışlıkla çalıştırmaz. -->
 		<TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">$(TargetFrameworks);net10.0-windows10.0.19041.0</TargetFrameworks>
 
 		<!-- Note for MacCatalyst:
@@ -26,8 +28,8 @@
 		<ApplicationId>com.xraysystem.mobile</ApplicationId>
 
 		<!-- Versions -->
-		<ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
-		<ApplicationVersion>1</ApplicationVersion>
+		<ApplicationDisplayVersion>1.1</ApplicationDisplayVersion>
+		<ApplicationVersion>2</ApplicationVersion>
 
 		<!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
 		<WindowsPackageType>None</WindowsPackageType>
@@ -70,6 +72,7 @@
 	  <ProjectReference Include="..\XRaySystem.Application\XRaySystem.Application.csproj" />
 	  <ProjectReference Include="..\XRaySystem.Domain\XRaySystem.Domain.csproj" />
 	  <ProjectReference Include="..\XRaySystem.Infrastructure\XRaySystem.Infrastructure.csproj" />
+	  <ProjectReference Include="..\XRaySystem.RemoteClient\XRaySystem.RemoteClient.csproj" />
 	</ItemGroup>
 
 </Project>

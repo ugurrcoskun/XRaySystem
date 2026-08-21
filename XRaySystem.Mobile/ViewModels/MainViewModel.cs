@@ -1,4 +1,5 @@
 using System.IO;
+using System.Buffers.Binary;
 using System.Collections.ObjectModel;
 using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -12,6 +13,7 @@ using XRaySystem.Domain.Interfaces;
 using XRaySystem.Domain.ValueObjects;
 using XRaySystem.Domain.WindowLevel;
 using XRaySystem.Mobile.Services;
+using XRaySystem.RemoteClient;
 
 namespace XRaySystem.Mobile.ViewModels;
 
@@ -23,6 +25,8 @@ public partial class MainViewModel : ObservableObject
     private readonly GetMeasurementHistoryUseCase _getHistory;
     private readonly MauiImageStorageService _imageStorage;
     private readonly MauiWindowLevelRenderer _renderer;
+    private readonly MobileSensorModeSettings _sensorModeSettings;
+    private readonly SensorRuntimeOptions _activeRuntime;
 
     private CancellationTokenSource? _snapCts;
     private RawGray16Frame? _currentRawFrame;
@@ -32,10 +36,12 @@ public partial class MainViewModel : ObservableObject
     private long _renderVersion;
     private bool _historyInitialized;
 
+    public event Action? ReviewImageOpened;
+
     private sealed record RenderRequest(RawGray16Frame Frame, int Center, int Width, long Version);
 
-    public IReadOnlyList<string> ProfileOptions { get; } =
-        ["Endüstriyel QA Fantomu", "Medikal Numune Fantomu"];
+    public IReadOnlyList<string> ConnectionModeOptions { get; } =
+        ["Yerel mock", "DeviceHost (remote)"];
 
     public ObservableCollection<SensorDataDto> RecentImages { get; } = [];
 
@@ -67,7 +73,14 @@ public partial class MainViewModel : ObservableObject
     private double _exposureTime = 1000.0;
 
     [ObservableProperty]
-    private int _selectedProfileIndex;
+    [NotifyPropertyChangedFor(nameof(IsRemoteConnectionMode))]
+    private int _selectedConnectionModeIndex;
+
+    [ObservableProperty]
+    private string _deviceHostUrl = string.Empty;
+
+    [ObservableProperty]
+    private string _remoteDeviceId = "mock-01";
 
     [ObservableProperty]
     private ImageSource? _currentImage;
@@ -111,6 +124,12 @@ public partial class MainViewModel : ObservableObject
     private string _lastFrameTimeText = "Henüz görüntü alınmadı";
 
     [ObservableProperty]
+    private int _currentFrameWidth;
+
+    [ObservableProperty]
+    private int _currentFrameHeight;
+
+    [ObservableProperty]
     private double _windowCenter = 32767.5;
 
     [ObservableProperty]
@@ -118,6 +137,10 @@ public partial class MainViewModel : ObservableObject
 
     public bool HasNoCurrentImage => !HasCurrentImage;
     public bool HasNoRecentImages => !HasRecentImages;
+    public bool IsRemoteConnectionMode => SelectedConnectionModeIndex == 1;
+    public string ActiveConnectionModeText => _activeRuntime.Mode == SensorRuntimeMode.Remote
+        ? "AKTİF: REMOTE"
+        : "AKTİF: YEREL MOCK";
 
     public bool AcquisitionParametersAreValid =>
         new AcquisitionParameters(Kv, Watt, ExposureTime).IsValid;
@@ -137,6 +160,10 @@ public partial class MainViewModel : ObservableObject
         DeviceStatus.Error => "HATA",
         _ => "BAĞLANTI YOK"
     };
+
+    public string StartLiveActionText => Status == DeviceStatus.Frozen
+        ? "CANLIYA DÖN"
+        : "CANLI BAŞLAT";
 
     public string StatusAccentColor => Status switch
     {
@@ -164,7 +191,9 @@ public partial class MainViewModel : ObservableObject
         SaveMeasurementUseCase saveMeasurement,
         GetMeasurementHistoryUseCase getHistory,
         MauiImageStorageService imageStorage,
-        MauiWindowLevelRenderer renderer)
+        MauiWindowLevelRenderer renderer,
+        MobileSensorModeSettings sensorModeSettings,
+        SensorRuntimeOptions activeRuntime)
     {
         _sensorService = sensorService;
         _snapMeasurement = snapMeasurement;
@@ -172,6 +201,12 @@ public partial class MainViewModel : ObservableObject
         _getHistory = getHistory;
         _imageStorage = imageStorage;
         _renderer = renderer;
+        _sensorModeSettings = sensorModeSettings;
+        _activeRuntime = activeRuntime;
+        _sensorService.Profile = AcquisitionProfile.IndustrialQaPhantom;
+        SelectedConnectionModeIndex = activeRuntime.Mode == SensorRuntimeMode.Remote ? 1 : 0;
+        DeviceHostUrl = activeRuntime.DeviceHostBaseAddress.AbsoluteUri;
+        RemoteDeviceId = activeRuntime.DeviceId;
 
         _sensorService.StatusChanged += status =>
             MainThread.BeginInvokeOnMainThread(() => Status = status);
@@ -188,18 +223,17 @@ public partial class MainViewModel : ObservableObject
     private bool CanStopLive() => Status is DeviceStatus.Capturing or DeviceStatus.Snapping;
     private bool CanSnap() =>
         !IsBusy &&
-        (Status is DeviceStatus.Connected or DeviceStatus.Frozen) &&
+        (Status is DeviceStatus.Connected or DeviceStatus.Capturing or DeviceStatus.Frozen) &&
         AcquisitionParametersAreValid;
     private bool CanAdjustImage() => Volatile.Read(ref _currentRawFrame) is not null;
+    private bool CanApplyConnectionSettings() => !IsBusy && Status == DeviceStatus.Disconnected;
 
     private void ApplyAcquisitionParameters()
     {
         var parameters = new AcquisitionParameters(Kv, Watt, ExposureTime);
         parameters.EnsureValid();
         _sensorService.Parameters = parameters;
-        _sensorService.Profile = SelectedProfileIndex == 1
-            ? AcquisitionProfile.MedicalSpecimenLikePhantom
-            : AcquisitionProfile.IndustrialQaPhantom;
+        _sensorService.Profile = AcquisitionProfile.IndustrialQaPhantom;
     }
 
     partial void OnStatusChanged(DeviceStatus value)
@@ -207,17 +241,20 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(StatusDisplayText));
         OnPropertyChanged(nameof(StatusAccentColor));
         OnPropertyChanged(nameof(StatusBadgeBackground));
+        OnPropertyChanged(nameof(StartLiveActionText));
         NotifyCommandStates();
     }
 
     partial void OnIsBusyChanged(bool value) => NotifyCommandStates();
 
-    partial void OnSelectedProfileIndexChanged(int value)
-    {
-        _sensorService.Profile = value == 1
-            ? AcquisitionProfile.MedicalSpecimenLikePhantom
-            : AcquisitionProfile.IndustrialQaPhantom;
-    }
+    partial void OnSelectedConnectionModeIndexChanged(int value) =>
+        ApplyConnectionSettingsCommand.NotifyCanExecuteChanged();
+
+    partial void OnDeviceHostUrlChanged(string value) =>
+        ApplyConnectionSettingsCommand.NotifyCanExecuteChanged();
+
+    partial void OnRemoteDeviceIdChanged(string value) =>
+        ApplyConnectionSettingsCommand.NotifyCanExecuteChanged();
 
     partial void OnWindowCenterChanged(double value) => QueueCurrentFrameForRender();
     partial void OnWindowWidthChanged(double value) => QueueCurrentFrameForRender();
@@ -231,6 +268,30 @@ public partial class MainViewModel : ObservableObject
         SnapCommand.NotifyCanExecuteChanged();
         AutoWindowLevelCommand.NotifyCanExecuteChanged();
         ResetWindowLevelCommand.NotifyCanExecuteChanged();
+        ApplyConnectionSettingsCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanApplyConnectionSettings))]
+    private void ApplyConnectionSettings()
+    {
+        try
+        {
+            var mode = IsRemoteConnectionMode
+                ? SensorRuntimeMode.Remote
+                : SensorRuntimeMode.Local;
+            var url = new Uri(DeviceHostUrl.Trim(), UriKind.Absolute);
+            var options = new SensorRuntimeOptions(mode, url, RemoteDeviceId.Trim());
+            _sensorModeSettings.Save(options);
+            StatusMessage = mode == _activeRuntime.Mode &&
+                            url == _activeRuntime.DeviceHostBaseAddress &&
+                            string.Equals(options.DeviceId, _activeRuntime.DeviceId, StringComparison.Ordinal)
+                ? "Bağlantı ayarları zaten etkin."
+                : "Bağlantı ayarı kaydedildi. Uygulamayı kapatıp yeniden başlatın.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Bağlantı ayarı geçersiz: {ex.Message}";
+        }
     }
 
     public async Task InitializeAsync()
@@ -238,6 +299,39 @@ public partial class MainViewModel : ObservableObject
         if (_historyInitialized) return;
         _historyInitialized = true;
         await RefreshHistoryAsync();
+    }
+
+    public async Task HandleWindowStoppedAsync()
+    {
+        _snapCts?.Cancel();
+        if (Status is not (DeviceStatus.Capturing or DeviceStatus.Snapping))
+            return;
+
+        try
+        {
+            await _sensorService.StopCaptureAsync();
+            StatusMessage = "Uygulama arka plana geçti; canlı akış güvenli biçimde durduruldu.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Arka plan geçişinde akış durdurulamadı: {ex.Message}";
+        }
+    }
+
+    public async Task HandleWindowDestroyingAsync()
+    {
+        _snapCts?.Cancel();
+        if (Status == DeviceStatus.Disconnected)
+            return;
+
+        try
+        {
+            await _sensorService.DisconnectAsync();
+        }
+        catch
+        {
+            // Uygulama kapanışı sürerken UI'ya güvenilir biçimde hata aktarılamaz.
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanConnect))]
@@ -325,6 +419,7 @@ public partial class MainViewModel : ObservableObject
         StatusMessage = "Yüksek çözünürlüklü snap alınıyor...";
         _snapCts?.Dispose();
         _snapCts = new CancellationTokenSource();
+        MobileSnapshotFiles? savedFiles = null;
 
         try
         {
@@ -337,17 +432,20 @@ public partial class MainViewModel : ObservableObject
             var width = Math.Max(1, (int)Math.Round(WindowWidth));
             var bmpBytes = await Task.Run(() =>
                 _renderer.RenderToBmp(measurement.Frame, center, width), _snapCts.Token);
-            SetCurrentImage(bmpBytes);
+            SetCurrentImage(bmpBytes, measurement.Frame.Width, measurement.Frame.Height);
 
             var measuredPowerW = measurement.Readings.Voltage * measurement.Readings.TubeCurrent;
-            var fileName = $"Snap_{measurement.Readings.Voltage:F0}kV_{measuredPowerW:F0}W_" +
-                           $"{measurement.Readings.ExposureTime:F0}ms_{DateTime.Now:yyyyMMdd_HHmmss}.bmp";
-            var path = await Task.Run(() => _imageStorage.SaveBmp(bmpBytes, fileName), _snapCts.Token);
+            var fileStem = $"Snap_{measurement.Readings.Voltage:F0}kV_{measuredPowerW:F0}W_" +
+                           $"{measurement.Readings.ExposureTime:F0}ms_{DateTime.Now:yyyyMMdd_HHmmss}";
+            savedFiles = await Task.Run(
+                () => _imageStorage.SaveSnapshot(bmpBytes, measurement.Frame, fileStem),
+                _snapCts.Token);
 
-            measurement.SetImagePath(path);
+            measurement.SetImagePath(savedFiles.PreviewPath);
+            measurement.SetRawImagePath(savedFiles.RawPath);
             await _saveMeasurement.ExecuteAsync(measurement);
             await RefreshHistoryAsync();
-            StatusMessage = $"Snap kaydedildi · {fileName}";
+            StatusMessage = $"Snap kaydedildi ve incelemeye donduruldu · RAW + önizleme · {fileStem}. Canlıya dönerek devam edebilirsiniz.";
         }
         catch (OperationCanceledException)
         {
@@ -355,7 +453,10 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Snap hatası: {ex.Message}";
+            var preserved = savedFiles is null
+                ? string.Empty
+                : " · RAW ve önizleme diskte korundu; metadata kaydı tamamlanmamış olabilir.";
+            StatusMessage = $"Snap hatası: {ex.Message}{preserved}";
         }
         finally
         {
@@ -371,7 +472,6 @@ public partial class MainViewModel : ObservableObject
         Kv = 70;
         Watt = 3500;
         ExposureTime = 1000;
-        SelectedProfileIndex = 0;
         StatusMessage = "Acquisition parametreleri varsayılan değerlere döndürüldü.";
     }
 
@@ -383,7 +483,11 @@ public partial class MainViewModel : ObservableObject
         try
         {
             var items = (await _getHistory.ExecuteAsync())
-                .Where(item => !string.IsNullOrWhiteSpace(item.ImagePath) && File.Exists(item.ImagePath))
+                .Where(item =>
+                    (!string.IsNullOrWhiteSpace(item.RawImagePath) && File.Exists(item.RawImagePath)) ||
+                    (!string.IsNullOrWhiteSpace(item.ImagePath) &&
+                     Path.GetExtension(item.ImagePath).Equals(".bmp", StringComparison.OrdinalIgnoreCase) &&
+                     File.Exists(item.ImagePath)))
                 .Take(12)
                 .ToList();
 
@@ -404,28 +508,63 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task LoadHistoryImageAsync(SensorDataDto? item)
     {
-        if (item?.ImagePath is null) return;
+        if (item is null || IsBusy) return;
+        IsBusy = true;
         try
         {
-            var bytes = await Task.Run(() => _imageStorage.LoadBmp(item.ImagePath));
-            Volatile.Write(ref _currentRawFrame, null);
-            Interlocked.Increment(ref _renderVersion);
-            Interlocked.Exchange(ref _pendingRender, null);
-            SetCurrentImage(bytes);
+            if (Status is DeviceStatus.Capturing or DeviceStatus.Snapping)
+            {
+                StatusMessage = "Geçmiş incelemesi için canlı akış durduruluyor...";
+                _snapCts?.Cancel();
+                await _sensorService.StopCaptureAsync();
+            }
+
+            StatusMessage = "Geçmiş görüntüsü doğrulanıp açılıyor...";
+            var hasRaw = !string.IsNullOrWhiteSpace(item.RawImagePath) && File.Exists(item.RawImagePath);
+            if (hasRaw)
+            {
+                var frame = await Task.Run(() => _imageStorage.LoadRaw(item.RawImagePath!));
+                Volatile.Write(ref _currentRawFrame, frame);
+                Interlocked.Increment(ref _renderVersion);
+                Interlocked.Exchange(ref _pendingRender, null);
+                QueueLatestRender(frame);
+                FrameKindDisplay = "HISTORY · RAW";
+                FrameMetadataText = $"{frame.Width} × {frame.Height} · GRAY16";
+                LastFrameTimeText = frame.Timestamp.ToLocalTime().ToString("dd.MM.yyyy · HH:mm:ss");
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(item.ImagePath) || !File.Exists(item.ImagePath))
+                    throw new FileNotFoundException("Görüntü önizlemesi bulunamadı.", item.ImagePath);
+
+                var bytes = await Task.Run(() => _imageStorage.LoadBmp(item.ImagePath));
+                Volatile.Write(ref _currentRawFrame, null);
+                Interlocked.Increment(ref _renderVersion);
+                Interlocked.Exchange(ref _pendingRender, null);
+                var (previewWidth, previewHeight) = ReadBmpDimensions(bytes);
+                SetCurrentImage(bytes, previewWidth, previewHeight);
+                FrameKindDisplay = "HISTORY · PREVIEW";
+                FrameMetadataText = "8-BIT BMP · LEGACY";
+                LastFrameTimeText = item.Timestamp.ToString("dd.MM.yyyy · HH:mm:ss");
+            }
+
             MeasuredPowerW = item.PowerW;
             MeasuredVoltageKv = item.Voltage;
             MeasuredExposureMs = item.ExposureTime;
             MeasuredIntensity = item.XRayIntensity;
-            FrameKindDisplay = "HISTORY · BMP";
-            FrameMetadataText = "8-BIT PREVIEW · LOCAL";
-            LastFrameTimeText = item.Timestamp.ToString("dd.MM.yyyy · HH:mm:ss");
             AutoWindowLevelCommand.NotifyCanExecuteChanged();
             ResetWindowLevelCommand.NotifyCanExecuteChanged();
-            StatusMessage = $"Geçmiş görüntüsü açıldı · {Path.GetFileName(item.ImagePath)}";
+            var openedPath = hasRaw ? item.RawImagePath : item.ImagePath;
+            StatusMessage = $"Geçmiş görüntüsü açıldı · {Path.GetFileName(openedPath)}";
+            MainThread.BeginInvokeOnMainThread(() => ReviewImageOpened?.Invoke());
         }
         catch (Exception ex)
         {
             StatusMessage = $"Geçmiş görüntüsü açılamadı: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
         }
     }
 
@@ -530,7 +669,7 @@ public partial class MainViewModel : ObservableObject
                     // Render sırasında daha yeni bir istek geldiyse eski sonucu UI'a gönderme.
                     if (request.Version == Volatile.Read(ref _renderVersion) &&
                         ReferenceEquals(request.Frame, Volatile.Read(ref _currentRawFrame)))
-                        SetCurrentImage(bmpBytes);
+                        SetCurrentImage(bmpBytes, request.Frame.Width, request.Frame.Height);
                 }
                 catch (Exception ex)
                 {
@@ -549,12 +688,24 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private void SetCurrentImage(byte[] bmpBytes)
+    private void SetCurrentImage(byte[] bmpBytes, int width, int height)
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
             CurrentImage = ImageSource.FromStream(() => new MemoryStream(bmpBytes, writable: false));
+            CurrentFrameWidth = Math.Max(0, width);
+            CurrentFrameHeight = Math.Max(0, height);
             HasCurrentImage = true;
         });
+    }
+
+    private static (int Width, int Height) ReadBmpDimensions(byte[] bmpBytes)
+    {
+        if (bmpBytes.Length < 26 || bmpBytes[0] != (byte)'B' || bmpBytes[1] != (byte)'M')
+            return (0, 0);
+
+        var width = BinaryPrimitives.ReadInt32LittleEndian(bmpBytes.AsSpan(18, 4));
+        var signedHeight = BinaryPrimitives.ReadInt32LittleEndian(bmpBytes.AsSpan(22, 4));
+        return (Math.Max(0, width), Math.Abs(signedHeight));
     }
 }

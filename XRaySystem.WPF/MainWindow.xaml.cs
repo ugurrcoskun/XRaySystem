@@ -67,8 +67,9 @@ namespace XRaySystem.WPF
             }
         }
 
-        private const double MainMinZoom = 0.05;
-        private const double MainMaxZoom = 200.0;
+        private const double MainMinZoom = 1.0;
+        // Kullanıcıya görünür bir üst sınır yoktur; bu yalnız double/renderer taşmasını engeller.
+        private const double MainNumericSafetyZoom = 1_000_000.0;
         private double _mainScale = 1.0;
         private double _mainTransX = 0.0;
         private double _mainTransY = 0.0;
@@ -90,7 +91,10 @@ namespace XRaySystem.WPF
         private void MainApplyZoom(double factor, Point center, System.Windows.Controls.Border viewport)
         {
             double oldScale = _mainScale;
-            double newScale = Math.Clamp(oldScale * factor, MainMinZoom, MainMaxZoom);
+            double requestedScale = oldScale * factor;
+            if (!double.IsFinite(requestedScale))
+                requestedScale = MainNumericSafetyZoom;
+            double newScale = Math.Clamp(requestedScale, MainMinZoom, MainNumericSafetyZoom);
             if (Math.Abs(newScale - oldScale) < 1e-9) return;
 
             double originX = viewport.ActualWidth / 2.0;
@@ -102,6 +106,16 @@ namespace XRaySystem.WPF
             _mainTransX = center.X - originX - (imgX - originX) * newScale;
             _mainTransY = center.Y - originY - (imgY - originY) * newScale;
 
+            if (newScale <= MainMinZoom)
+            {
+                _mainTransX = 0;
+                _mainTransY = 0;
+            }
+            else
+            {
+                ClampMainTranslation();
+            }
+
             SyncMainTransforms();
         }
 
@@ -112,6 +126,7 @@ namespace XRaySystem.WPF
             XRayTranslateTransform.X = _mainTransX;
             XRayTranslateTransform.Y = _mainTransY;
             UpdateZoomText();
+            UpdateMainCoordinateReadout();
         }
 
         private void ZoomIn_Click(object sender, RoutedEventArgs e)
@@ -150,6 +165,7 @@ namespace XRaySystem.WPF
         private void XRayImage_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
         {
             var border = (System.Windows.Controls.Border)sender;
+            UpdateMainPointerCoordinate(e.GetPosition(border));
             if (!_mainIsMouseDown || !border.IsMouseCaptured) return;
             var current = e.GetPosition(border);
             var delta = current - _mainPanStart;
@@ -160,8 +176,12 @@ namespace XRaySystem.WPF
             }
             _mainTransX = _mainPanOriginX + delta.X;
             _mainTransY = _mainPanOriginY + delta.Y;
+            ClampMainTranslation();
             SyncMainTransforms();
         }
+
+        private void XRayImage_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e) =>
+            MainPointerCoordinateText.Text = "İMLEÇ X: —  Y: —";
 
         private void XRayImage_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
@@ -181,7 +201,115 @@ namespace XRaySystem.WPF
         }
 
         private void UpdateZoomText() => ZoomPercentText.Text = $"{_mainScale * 100:0}%";
-        private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e) { UpdateResponsiveLayout(); }
+
+        private void ClampMainTranslation()
+        {
+            if (_mainScale <= MainMinZoom)
+            {
+                _mainTransX = 0;
+                _mainTransY = 0;
+                return;
+            }
+
+            var maximumX = Math.Max(0, XRayScanBorder.ActualWidth * (_mainScale - 1) / 2);
+            var maximumY = Math.Max(0, XRayScanBorder.ActualHeight * (_mainScale - 1) / 2);
+            _mainTransX = Math.Clamp(_mainTransX, -maximumX, maximumX);
+            _mainTransY = Math.Clamp(_mainTransY, -maximumY, maximumY);
+        }
+
+        private bool TryViewportToImagePixel(Point viewportPoint, out int pixelX, out int pixelY)
+        {
+            pixelX = 0;
+            pixelY = 0;
+            if (XRayImage.Source is not BitmapSource bitmap ||
+                bitmap.PixelWidth <= 0 || bitmap.PixelHeight <= 0 ||
+                ImageLayer.ActualWidth <= 0 || ImageLayer.ActualHeight <= 0)
+                return false;
+
+            var originX = XRayScanBorder.ActualWidth / 2.0;
+            var originY = XRayScanBorder.ActualHeight / 2.0;
+            var layerX = (viewportPoint.X - originX - _mainTransX) / _mainScale + originX;
+            var layerY = (viewportPoint.Y - originY - _mainTransY) / _mainScale + originY;
+            var fitScale = Math.Min(
+                ImageLayer.ActualWidth / bitmap.PixelWidth,
+                ImageLayer.ActualHeight / bitmap.PixelHeight);
+            if (fitScale <= 0 || !double.IsFinite(fitScale))
+                return false;
+
+            var renderedWidth = bitmap.PixelWidth * fitScale;
+            var renderedHeight = bitmap.PixelHeight * fitScale;
+            var offsetX = (ImageLayer.ActualWidth - renderedWidth) / 2.0;
+            var offsetY = (ImageLayer.ActualHeight - renderedHeight) / 2.0;
+            var sourceX = (layerX - offsetX) / fitScale;
+            var sourceY = (layerY - offsetY) / fitScale;
+            if (sourceX < 0 || sourceY < 0 ||
+                sourceX >= bitmap.PixelWidth || sourceY >= bitmap.PixelHeight)
+                return false;
+
+            pixelX = Math.Clamp((int)Math.Floor(sourceX), 0, bitmap.PixelWidth - 1);
+            pixelY = Math.Clamp((int)Math.Floor(sourceY), 0, bitmap.PixelHeight - 1);
+            return true;
+        }
+
+        private void UpdateMainCoordinateReadout()
+        {
+            var center = new Point(XRayScanBorder.ActualWidth / 2.0, XRayScanBorder.ActualHeight / 2.0);
+            MainCenterCoordinateText.Text = TryViewportToImagePixel(center, out var x, out var y)
+                ? $"MERKEZ X: {x}  Y: {y}"
+                : "MERKEZ X: —  Y: —";
+        }
+
+        private void UpdateMainPointerCoordinate(Point point)
+        {
+            MainPointerCoordinateText.Text = TryViewportToImagePixel(point, out var x, out var y)
+                ? $"İMLEÇ X: {x}  Y: {y}"
+                : "İMLEÇ X: —  Y: —";
+        }
+
+        private void FocusCoordinate_Click(object sender, RoutedEventArgs e)
+        {
+            if (XRayImage.Source is not BitmapSource bitmap)
+            {
+                MainCoordinateValidationText.Text = "Önce görüntü açın.";
+                return;
+            }
+
+            if (!int.TryParse(MainCoordinateXInput.Text, out var pixelX) ||
+                !int.TryParse(MainCoordinateYInput.Text, out var pixelY) ||
+                !double.TryParse(MainCoordinateZoomInput.Text, out var zoomPercent) ||
+                pixelX < 0 || pixelX >= bitmap.PixelWidth ||
+                pixelY < 0 || pixelY >= bitmap.PixelHeight ||
+                zoomPercent < 100)
+            {
+                MainCoordinateValidationText.Text =
+                    $"X: 0–{bitmap.PixelWidth - 1}, Y: 0–{bitmap.PixelHeight - 1}, zoom ≥ 100";
+                return;
+            }
+
+            var fitScale = Math.Min(
+                ImageLayer.ActualWidth / bitmap.PixelWidth,
+                ImageLayer.ActualHeight / bitmap.PixelHeight);
+            var renderedWidth = bitmap.PixelWidth * fitScale;
+            var renderedHeight = bitmap.PixelHeight * fitScale;
+            var offsetX = (ImageLayer.ActualWidth - renderedWidth) / 2.0;
+            var offsetY = (ImageLayer.ActualHeight - renderedHeight) / 2.0;
+            var layerPointX = offsetX + (pixelX + 0.5) * fitScale;
+            var layerPointY = offsetY + (pixelY + 0.5) * fitScale;
+            _mainScale = Math.Clamp(zoomPercent / 100.0, MainMinZoom, MainNumericSafetyZoom);
+            var originX = XRayScanBorder.ActualWidth / 2.0;
+            var originY = XRayScanBorder.ActualHeight / 2.0;
+            _mainTransX = -(layerPointX - originX) * _mainScale;
+            _mainTransY = -(layerPointY - originY) * _mainScale;
+            MainCoordinateValidationText.Text = string.Empty;
+            SyncMainTransforms();
+        }
+
+        private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            UpdateResponsiveLayout();
+            ClampMainTranslation();
+            SyncMainTransforms();
+        }
         private void UpdateResponsiveLayout()
         {
             if (ContentGrid == null) return;

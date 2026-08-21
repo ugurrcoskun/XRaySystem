@@ -19,6 +19,7 @@ public sealed class XRayDbContextModelSnapshot : ModelSnapshot
             entity.Property<string>("ImagePath").HasColumnType("TEXT");
             entity.Property<bool>("IsSimulator").HasColumnType("INTEGER");
             entity.Property<int>("Profile").HasColumnType("INTEGER");
+            entity.Property<string>("RawImagePath").HasColumnType("TEXT");
             entity.Property<DateTime>("Timestamp").HasColumnType("TEXT");
             entity.HasKey("Id");
             entity.ToTable("Measurements");

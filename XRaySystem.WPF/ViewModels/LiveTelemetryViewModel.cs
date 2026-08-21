@@ -55,6 +55,9 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private System.Windows.Media.ImageSource? _currentFrame;
 
     [ObservableProperty]
+    private string _currentFrameResolution = "RES: —";
+
+    [ObservableProperty]
     private string _imageStatusBadgeText = "DISCONNECTED";
 
     [ObservableProperty]
@@ -245,6 +248,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
             WCenter = 32767.5;
             WWidth = 65535;
         }
+        CurrentFrameResolution = $"RES: {frame.Width}x{frame.Height}";
         OnPropertyChanged(nameof(HasRawSource));
         AutoWindowLevelCommand.NotifyCanExecuteChanged();
         ResetWindowLevelCommand.NotifyCanExecuteChanged();
@@ -255,6 +259,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
         _currentRawFrame = null;
         _currentWindowLevelKey = string.Empty;
         _rawDisplayContext = RawDisplayContext.None;
+        CurrentFrameResolution = "RES: —";
         _windowLevelRenderer.Invalidate();
         OnPropertyChanged(nameof(HasRawSource));
         AutoWindowLevelCommand.NotifyCanExecuteChanged();
@@ -386,8 +391,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
 
     partial void OnProfileChanged(AcquisitionProfile value)
     {
-        if (_sensorService.CurrentStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected)
-            _sensorService.Profile = value;
+        _sensorService.Profile = value;
     }
 
     /// <summary>Min exposure süresi: her zaman 1ms (dedektör sınırı)</summary>
@@ -612,20 +616,6 @@ public partial class LiveTelemetryViewModel : ObservableObject
         _windowLevelRenderer.Invalidate();
         await _sensorService.DisconnectAsync();
         ClearLiveRawSource();
-    }
-
-    [RelayCommand]
-    private async Task SaveLatestAsync()
-    {
-        // Snap artık otomatik DB'ye kaydediyor.
-        // Bu buton artık kullanım dışı; tekrar kaydetmeye çalışmak
-        // EF Core tracked-entity duplicate hatası verir.
-        System.Windows.MessageBox.Show(
-            "Snap yapıldığında görüntü otomatik olarak kaydedilir.\nTekrar kaydetmeye gerek yok.",
-            "Bilgi",
-            System.Windows.MessageBoxButton.OK,
-            System.Windows.MessageBoxImage.Information);
-        await Task.CompletedTask;
     }
 
     [RelayCommand]

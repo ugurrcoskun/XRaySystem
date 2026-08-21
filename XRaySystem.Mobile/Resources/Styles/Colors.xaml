@@ -16,7 +16,6 @@
     <Color x:Key="Primary">#00E5FF</Color>
     <Color x:Key="PrimaryBright">#5CFFFF</Color>
     <Color x:Key="PrimaryDark">#007E91</Color>
-    <Color x:Key="PrimarySoft">#123844</Color>
     <Color x:Key="Success">#32D74B</Color>
     <Color x:Key="Warning">#FFB020</Color>
     <Color x:Key="Danger">#FF4D5E</Color>

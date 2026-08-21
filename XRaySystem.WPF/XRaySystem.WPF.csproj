@@ -7,6 +7,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Kaynağı/lisansı/anonimliği doğrulanmamış sample veriler dağıtım çıktısına varsayılan olarak girmez. -->
+    <IncludeUnverifiedSampleData Condition="'$(IncludeUnverifiedSampleData)' == ''">false</IncludeUnverifiedSampleData>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,11 +22,14 @@
     </Content>
   </ItemGroup>
 
-  <!-- Gerçek DICOM verilerini (.raw) build çıktısına kopyala -->
-  <!-- DiskImageSensorService AppContext.BaseDirectory\SampleData\ yolunu otomatik bulur -->
-  <ItemGroup>
-    <Content Include="..\XRaySystem.Infrastructure\SampleData\**">
-      <Link>SampleData\%(RecursiveDir)%(Filename)%(Extension)</Link>
+  <!-- Yalnız bilinçli geliştirme opt-in'inde türetilmiş RAW + manifest kopyalanır; DICOM asla paketlenmez. -->
+  <ItemGroup Condition="'$(IncludeUnverifiedSampleData)' == 'true'">
+    <Content Include="..\XRaySystem.Infrastructure\SampleData\*.raw">
+      <Link>SampleData\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\XRaySystem.Infrastructure\SampleData\manifest.json">
+      <Link>SampleData\manifest.json</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
@@ -32,11 +37,12 @@
   <ItemGroup>
     <ProjectReference Include="..\XRaySystem.Application\XRaySystem.Application.csproj" />
     <ProjectReference Include="..\XRaySystem.Infrastructure\XRaySystem.Infrastructure.csproj" />
+    <ProjectReference Include="..\XRaySystem.RemoteClient\XRaySystem.RemoteClient.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
   </ItemGroup>
 
 </Project>

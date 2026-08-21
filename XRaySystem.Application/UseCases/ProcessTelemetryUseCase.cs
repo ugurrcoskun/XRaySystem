@@ -23,7 +23,8 @@ public class ProcessTelemetryUseCase
             Frame = measurement.Frame,
             Profile = measurement.Profile,
             IsSimulator = measurement.IsSimulator,
-            ImagePath = measurement.ImagePath
+            ImagePath = measurement.ImagePath,
+            RawImagePath = measurement.RawImagePath
         };
     }
 }

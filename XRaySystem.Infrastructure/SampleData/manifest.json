@@ -4,6 +4,13 @@
   "normalization_policy": "display-normalized-uint16",
   "normalization_policy_version": 1,
   "physical_calibration_in_raw": false,
+  "distribution": {
+    "status": "quarantined",
+    "approved": false,
+    "source_license_verified": false,
+    "metadata_anonymized": false,
+    "pixel_annotations_reviewed": false
+  },
   "snap_width": 2304,
   "snap_height": 2930,
   "live_width": 512,
@@ -22,8 +29,8 @@
       "kvp": "120",
       "exposure_time": "1601",
       "tube_current": "170",
-      "source_file": "CT1_IMP.dcm"
-      ,"rescale_slope": 1.0,
+      "source_file": "CT1_IMP.dcm",
+      "rescale_slope": 1.0,
       "rescale_intercept": 0.0,
       "normalization_policy": "display-normalized-uint16",
       "normalization_policy_version": 1
@@ -40,6 +47,34 @@
       "modality": "CT",
       "rescale_slope": 1.0,
       "rescale_intercept": 0.0,
+      "normalization_policy": "display-normalized-uint16",
+      "normalization_policy_version": 1
+    },
+    {
+      "stem": "CT1_BE",
+      "entry_id": "CT1_BE",
+      "snap_file": "CT1_BE_snap_2304x2930.raw",
+      "live_file": "CT1_BE_live_512x512.raw",
+      "snap_width": 2304,
+      "snap_height": 2930,
+      "live_width": 512,
+      "live_height": 512,
+      "modality": "CT",
+      "source_file": "CT1_BE.dcm",
+      "normalization_policy": "display-normalized-uint16",
+      "normalization_policy_version": 1
+    },
+    {
+      "stem": "CT_small",
+      "entry_id": "CT_small",
+      "snap_file": "CT_small_snap_2304x2930.raw",
+      "live_file": "CT_small_live_512x512.raw",
+      "snap_width": 2304,
+      "snap_height": 2930,
+      "live_width": 512,
+      "live_height": 512,
+      "modality": "CT",
+      "source_file": "source-not-present",
       "normalization_policy": "display-normalized-uint16",
       "normalization_policy_version": 1
     }

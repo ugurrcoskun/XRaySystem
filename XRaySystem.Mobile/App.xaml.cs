@@ -17,7 +17,11 @@ namespace XRaySystem.Mobile
         {
             // App kaynakları InitializeComponent ile yüklendikten sonra sayfayı oluştur.
             // Böylece MainPage içindeki StaticResource anahtarları çözülebilir.
-            return new Window(_services.GetRequiredService<MainPage>());
+            var page = _services.GetRequiredService<MainPage>();
+            var window = new Window(page);
+            window.Stopped += async (_, _) => await page.HandleWindowStoppedAsync();
+            window.Destroying += async (_, _) => await page.HandleWindowDestroyingAsync();
+            return window;
         }
     }
 }

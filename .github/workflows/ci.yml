@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: Core tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install .NET SDKs
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore XRaySystem.Tests/XRaySystem.Tests.csproj
+
+      - name: Test
+        run: dotnet test XRaySystem.Tests/XRaySystem.Tests.csproj --configuration Release --no-restore --disable-build-servers -m:1
+
+  windows-wpf:
+    name: Windows WPF build and tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install .NET SDKs
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore XRaySystem.WPF.Tests/XRaySystem.WPF.Tests.csproj
+
+      - name: Build WPF
+        run: dotnet build XRaySystem.WPF/XRaySystem.WPF.csproj --configuration Release --no-restore --disable-build-servers -m:1
+
+      - name: Test Gray16 TIFF storage
+        run: dotnet test XRaySystem.WPF.Tests/XRaySystem.WPF.Tests.csproj --configuration Release --no-restore --disable-build-servers -m:1

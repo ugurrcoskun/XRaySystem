@@ -6,7 +6,6 @@
         FontFamily="Segoe UI"
         WindowStartupLocation="CenterScreen"
         PreviewMouseDown="Window_PreviewMouseDown">
-
     <Window.Resources>
         <Style x:Key="ModernInputTextBoxStyle" TargetType="TextBox">
             <Setter Property="Background" Value="#1E293B"/>
@@ -184,7 +183,7 @@
                         </Style>
                     </Button.Style>
                 </Button>
-                
+
                 <Button Command="{Binding ConnectAndStartCommand}" Margin="0,0,10,0">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
@@ -324,6 +323,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     
                     <TextBlock Text="LIVE X-RAY SCAN MATRIX" Style="{StaticResource MetricLabelStyle}"/>
@@ -333,6 +333,7 @@
                             MouseLeftButtonDown="XRayImage_MouseLeftButtonDown"
                             MouseLeftButtonUp="XRayImage_MouseLeftButtonUp"
                             MouseMove="XRayImage_MouseMove"
+                            MouseLeave="XRayImage_MouseLeave"
                             LostMouseCapture="XRayImage_LostMouseCapture"
                             Cursor="Cross">
                         <Grid x:Name="XRayContainer" Background="Transparent">
@@ -344,15 +345,16 @@
                                     <TranslateTransform x:Name="XRayTranslateTransform" X="0" Y="0"/>
                                 </TransformGroup>
                               </Grid.RenderTransform>
-                              <Image x:Name="XRayImage" Source="{Binding CurrentFrame}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Image x:Name="XRayImage" Source="{Binding CurrentFrame}" Stretch="Uniform" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
                               <Path Data="M 150,0 L 150,300 M 0,150 L 300,150" Stroke="#00F0FF" StrokeThickness="0.5" Opacity="0.3" HorizontalAlignment="Center" VerticalAlignment="Center" Stretch="Uniform"/>
                             </Grid>
                              
                             <!-- Viewport HUD: deliberately outside ImageLayer. -->
                             <Grid>
                                 <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="15" IsHitTestVisible="False">
-                                    <TextBlock Text="FOV: 24x30 cm" Foreground="#00F0FF" FontSize="12" Opacity="0.7"/>
-                                    <TextBlock Text="RES: 2304x2930" Foreground="#00F0FF" FontSize="12" Opacity="0.7"/>
+                                    <TextBlock Text="{Binding CurrentFrameResolution}" Foreground="#00F0FF" FontSize="12" Opacity="0.7"/>
+                                    <TextBlock x:Name="MainCenterCoordinateText" Text="MERKEZ X: —  Y: —" Foreground="#A7B6C9" FontSize="11" Margin="0,3,0,0"/>
+                                    <TextBlock x:Name="MainPointerCoordinateText" Text="İMLEÇ X: —  Y: —" Foreground="#667991" FontSize="10" Margin="0,2,0,0"/>
                                 </StackPanel>
 
                                 <!-- CANLI / SNAP / GEÇMİŞ İNCELEME STATUS ROZETİ (Görsel durum belirteci) -->
@@ -378,6 +380,147 @@
                                     <TextBlock Text="{Binding LatestTelemetry.Timestamp, StringFormat={}{0:yyyy-MM-dd HH:mm:ss.fff}}" Foreground="#00F0FF" FontSize="14" Opacity="0.8" HorizontalAlignment="Right"/>
                                 </StackPanel>
                             </Grid>
+                        </Grid>
+                    </Border>
+
+                    <!-- Gray16 Window / Level controls. Kept outside the transformed image layer. -->
+                    <Border Grid.Row="2"
+                            Margin="0,12,0,0"
+                            Padding="12,10"
+                            Background="#0D1422"
+                            BorderBrush="#25344D"
+                            BorderThickness="1"
+                            CornerRadius="6">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="58"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Text="CENTER"
+                                       Foreground="#667991"
+                                       FontSize="10"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,10,0"/>
+                            <Slider Grid.Column="1"
+                                    Minimum="0"
+                                    Maximum="65535"
+                                    Value="{Binding WCenter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    IsEnabled="{Binding HasRawSource}"
+                                    VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="2"
+                                       Text="{Binding WCenter, StringFormat={}{0:F0}}"
+                                       Foreground="#00E5FF"
+                                       FontSize="11"
+                                       TextAlignment="Right"
+                                       VerticalAlignment="Center"
+                                       Margin="8,0,0,0"/>
+
+                            <TextBlock Grid.Row="1"
+                                       Text="WIDTH"
+                                       Foreground="#667991"
+                                       FontSize="10"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       Margin="0,3,10,0"/>
+                            <Slider Grid.Row="1"
+                                    Grid.Column="1"
+                                    Minimum="1"
+                                    Maximum="65535"
+                                    Value="{Binding WWidth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    IsEnabled="{Binding HasRawSource}"
+                                    VerticalAlignment="Center"
+                                    Margin="0,3,0,0"/>
+                            <TextBlock Grid.Row="1"
+                                       Grid.Column="2"
+                                       Text="{Binding WWidth, StringFormat={}{0:F0}}"
+                                       Foreground="#00E5FF"
+                                       FontSize="11"
+                                       TextAlignment="Right"
+                                       VerticalAlignment="Center"
+                                       Margin="8,3,0,0"/>
+
+                            <StackPanel Grid.RowSpan="2"
+                                        Grid.Column="3"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center"
+                                        Margin="14,0,0,0">
+                                <Button Content="AUTO"
+                                        Command="{Binding AutoWindowLevelCommand}"
+                                        IsEnabled="{Binding HasRawSource}"
+                                        Height="32"
+                                        MinWidth="62"
+                                        Padding="10,0"
+                                        Background="#1E293B"
+                                        Foreground="#F5F8FF"
+                                        BorderBrush="#38506F"
+                                        BorderThickness="1"
+                                        Cursor="Hand"/>
+                                <Button Content="RESET"
+                                        Command="{Binding ResetWindowLevelCommand}"
+                                        IsEnabled="{Binding HasRawSource}"
+                                        Height="32"
+                                        MinWidth="62"
+                                        Margin="7,0,0,0"
+                                        Padding="10,0"
+                                        Background="#1E293B"
+                                        Foreground="#F5F8FF"
+                                        BorderBrush="#38506F"
+                                        BorderThickness="1"
+                                        Cursor="Hand"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="2"
+                                        Grid.ColumnSpan="4"
+                                        Orientation="Horizontal"
+                                        Margin="0,9,0,0">
+                                <TextBlock Text="KOORDİNATA GİT"
+                                           Foreground="#667991"
+                                           FontSize="10"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,10,0"/>
+                                <TextBlock Text="X" Foreground="#A7B6C9" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                <TextBox x:Name="MainCoordinateXInput"
+                                         Width="70"
+                                         Style="{StaticResource ModernInputTextBoxStyle}"
+                                         ToolTip="Görüntü piksel X koordinatı"/>
+                                <TextBlock Text="Y" Foreground="#A7B6C9" VerticalAlignment="Center" Margin="9,0,5,0"/>
+                                <TextBox x:Name="MainCoordinateYInput"
+                                         Width="70"
+                                         Style="{StaticResource ModernInputTextBoxStyle}"
+                                         ToolTip="Görüntü piksel Y koordinatı"/>
+                                <TextBlock Text="ZOOM %" Foreground="#A7B6C9" VerticalAlignment="Center" Margin="9,0,5,0"/>
+                                <TextBox x:Name="MainCoordinateZoomInput"
+                                         Width="82"
+                                         Text="800"
+                                         Style="{StaticResource ModernInputTextBoxStyle}"
+                                         ToolTip="Koordinata gidildiğinde uygulanacak zoom yüzdesi"/>
+                                <Button Content="ODAKLA"
+                                        Click="FocusCoordinate_Click"
+                                        Height="34"
+                                        MinWidth="72"
+                                        Margin="9,0,0,0"
+                                        Padding="10,0"
+                                        Background="#1E293B"
+                                        Foreground="#F5F8FF"
+                                        BorderBrush="#38506F"
+                                        BorderThickness="1"
+                                        Cursor="Hand"/>
+                                <TextBlock x:Name="MainCoordinateValidationText"
+                                           Foreground="#FFB020"
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Margin="10,0,0,0"/>
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </Grid>

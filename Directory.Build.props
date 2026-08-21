@@ -1,5 +1,15 @@
 <Project>
   <PropertyGroup>
-    <MSBuildProjectExtensionsPath>$(LocalAppData)\XRaySystem\$(MSBuildProjectName)\obj\</MSBuildProjectExtensionsPath>
+    <!-- Ara çıktı başka kökteyken eski proje-içi obj/bin dosyalarının Compile glob'una girmesini engelle. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <!-- Mac ve Windows aynı paylaşılan kaynak ağacını kullanırken obj dosyalarını ayır. -->
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('windows'))">
+    <BaseIntermediateOutputPath>$(LocalAppData)/XRaySystem/$(MSBuildProjectName)/obj/</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('osx'))">
+    <BaseIntermediateOutputPath>/private/tmp/XRaySystem/$(MSBuildProjectName)/obj/</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
   </PropertyGroup>
 </Project>

@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "XRaySystem.WPF - Local Mock": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "XRAYSYSTEM_SENSOR_MODE": "Local"
+      }
+    },
+    "XRaySystem.WPF - Remote DeviceHost": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "XRAYSYSTEM_SENSOR_MODE": "Remote",
+        "XRAYSYSTEM_DEVICEHOST_URL": "http://127.0.0.1:5088",
+        "XRAYSYSTEM_DEVICE_ID": "mock-01"
+      }
+    }
+  }
+}

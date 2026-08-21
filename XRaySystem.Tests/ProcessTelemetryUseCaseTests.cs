@@ -19,11 +19,15 @@ public sealed class ProcessTelemetryUseCaseTests
             new AcquisitionSettings(5, 80, 33, AcquisitionProfile.IndustrialQaPhantom),
             "unit-test");
         var measurement = new XRayMeasurement(readings, frame, isSimulator: true);
+        measurement.SetImagePath("preview.bmp");
+        measurement.SetRawImagePath("source.xrayraw");
 
         var dto = new ProcessTelemetryUseCase().Execute(measurement);
 
         Assert.Equal(400, dto.PowerW);
         Assert.Equal(80, dto.Voltage);
         Assert.True(dto.IsSimulator);
+        Assert.Equal("preview.bmp", dto.ImagePath);
+        Assert.Equal("source.xrayraw", dto.RawImagePath);
     }
 }

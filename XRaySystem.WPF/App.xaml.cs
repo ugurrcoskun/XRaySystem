@@ -1,15 +1,16 @@
 using System.Windows;
 using Microsoft.EntityFrameworkCore;
 using System;
+using System.Net.Http;
 using Microsoft.Extensions.DependencyInjection;
 using XRaySystem.Application.UseCases;
 using XRaySystem.Domain.Interfaces;
-using XRaySystem.Infrastructure.Cloud;
 using XRaySystem.Infrastructure.Persistence;
 using XRaySystem.Infrastructure.Sensors;
 using System.Runtime.InteropServices;
 using XRaySystem.WPF.Services;
 using XRaySystem.WPF.ViewModels;
+using XRaySystem.RemoteClient;
 
 namespace XRaySystem.WPF
 {
@@ -80,11 +81,25 @@ namespace XRaySystem.WPF
             services.AddSingleton<IImageStorageService, ImageStorageService>();
             services.AddSingleton<WindowLevelRenderer>();
 
-            // ── Sensör Modu Seçimi ────────────────────────────────────────────────
-            // Matematiksel 16-bit Dijital Test Fantomu simülatörü (MockXRaySensorService)
-            services.AddSingleton<ISensorService, MockXRaySensorService>();
-
-            services.AddSingleton<ICloudPublisher, NullCloudPublisher>();
+            // Local varsayılandır. Remote mod environment ayarlarıyla DeviceHost'a geçer.
+            var runtime = SensorRuntimeOptions.FromEnvironment(new Uri("http://127.0.0.1:5088"));
+            services.AddSingleton(runtime);
+            if (runtime.Mode == SensorRuntimeMode.Remote)
+            {
+                services.AddSingleton(new RemoteDeviceClientOptions(
+                    runtime.DeviceHostBaseAddress,
+                    runtime.DeviceId,
+                    ApiKey: Environment.GetEnvironmentVariable("XRAYSYSTEM_DEVICEHOST_API_KEY")));
+                services.AddSingleton(new HttpClient());
+                services.AddSingleton<RemoteDeviceClient>();
+                services.AddSingleton<IRemoteDeviceClient>(provider =>
+                    provider.GetRequiredService<RemoteDeviceClient>());
+                services.AddSingleton<ISensorService, RemoteSensorService>();
+            }
+            else
+            {
+                services.AddSingleton<ISensorService, MockXRaySensorService>();
+            }
 
             // Application (Use Cases)
             services.AddTransient<StartCaptureUseCase>();
