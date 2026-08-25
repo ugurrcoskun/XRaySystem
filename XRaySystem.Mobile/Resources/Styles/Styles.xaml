@@ -137,6 +137,16 @@
         <Setter Property="BorderColor" Value="#652634" />
     </Style>
 
+    <Style x:Key="AbortAcquisitionButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
+        <Setter Property="BackgroundColor" Value="{StaticResource Danger}" />
+        <Setter Property="TextColor" Value="{StaticResource White}" />
+        <Setter Property="BorderColor" Value="{StaticResource Danger}" />
+        <Setter Property="BorderWidth" Value="2" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="CharacterSpacing" Value="0.8" />
+        <Setter Property="MinimumHeightRequest" Value="56" />
+    </Style>
+
     <Style x:Key="SnapActionButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
         <Setter Property="BackgroundColor" Value="{StaticResource Warning}" />
         <Setter Property="TextColor" Value="#171006" />

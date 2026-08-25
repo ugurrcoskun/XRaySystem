@@ -19,21 +19,36 @@ await using var client = new RemoteDeviceClient(
 using var sensor = new RemoteSensorService(client);
 var lowFrameReceived = new TaskCompletionSource<RemoteLowFrame>(
     TaskCreationOptions.RunContinuationsAsynchronously);
-var liveMeasurementReceived = new TaskCompletionSource<XRayMeasurement>(
+var grabMeasurementReceived = new TaskCompletionSource<XRayMeasurement>(
     TaskCreationOptions.RunContinuationsAsynchronously);
 var snapCompleted = new TaskCompletionSource<SnapProgressEventContract>(
+    TaskCreationOptions.RunContinuationsAsynchronously);
+var verifiedExposureActive = new TaskCompletionSource<HardwareStateEventContract>(
+    TaskCreationOptions.RunContinuationsAsynchronously);
+var exposureEnded = new TaskCompletionSource<ExposureEndedEventContract>(
+    TaskCreationOptions.RunContinuationsAsynchronously);
+var grabFrameReady = new TaskCompletionSource<GrabFrameReadyEventContract>(
+    TaskCreationOptions.RunContinuationsAsynchronously);
+var grabFrozen = new TaskCompletionSource<GrabFrozenEventContract>(
     TaskCreationOptions.RunContinuationsAsynchronously);
 var remoteErrors = new System.Collections.Concurrent.ConcurrentQueue<DeviceErrorEventContract>();
 client.LowFrameReceived += frame => lowFrameReceived.TrySetResult(frame);
 sensor.MeasurementReceived += measurement =>
 {
-    if (measurement.Frame?.Kind == FrameKind.LivePreview)
-        liveMeasurementReceived.TrySetResult(measurement);
+    if (measurement.Frame?.Kind == FrameKind.GrabPreview)
+        grabMeasurementReceived.TrySetResult(measurement);
 };
 client.SnapProgressReceived += progress =>
 {
     if (progress.Percent == 100) snapCompleted.TrySetResult(progress);
 };
+client.HardwareStateReceived += state =>
+{
+    if (state.XRayActive == true) verifiedExposureActive.TrySetResult(state);
+};
+client.ExposureEndedReceived += ended => exposureEnded.TrySetResult(ended);
+client.GrabFrameReadyReceived += frame => grabFrameReady.TrySetResult(frame);
+client.GrabFrozenReceived += frozen => grabFrozen.TrySetResult(frozen);
 client.ErrorReceived += remoteErrors.Enqueue;
 
 try
@@ -44,35 +59,73 @@ try
     await sensor.StartCaptureAsync();
 
     var lowFrame = await lowFrameReceived.Task.WaitAsync(timeout.Token);
-    var liveMeasurement = await liveMeasurementReceived.Task.WaitAsync(timeout.Token);
+    var grabMeasurement = await grabMeasurementReceived.Task.WaitAsync(timeout.Token);
+    var activeState = await verifiedExposureActive.Task.WaitAsync(timeout.Token);
+    var readyEvent = await grabFrameReady.Task.WaitAsync(timeout.Token);
     if (lowFrame.BmpBytes.Length < 2 ||
         lowFrame.BmpBytes[0] != (byte)'B' ||
         lowFrame.BmpBytes[1] != (byte)'M')
-        throw new InvalidDataException("Remote live frame BMP değil.");
-    if (liveMeasurement.Frame?.Width != lowFrame.Width ||
-        liveMeasurement.Frame.Height != lowFrame.Height)
-        throw new InvalidDataException("Remote adapter live frame boyutları uyuşmuyor.");
+        throw new InvalidDataException("Remote GRAB frame BMP değil.");
+    if (grabMeasurement.Frame?.Width != lowFrame.Width ||
+        grabMeasurement.Frame.Height != lowFrame.Height)
+        throw new InvalidDataException("Remote adapter GRAB frame boyutları uyuşmuyor.");
+    if (activeState.ActiveAcquisitionId is null ||
+        readyEvent.AcquisitionId != lowFrame.AcquisitionId ||
+        readyEvent.SequenceNumber != lowFrame.FrameSequence)
+        throw new InvalidDataException("Remote doğrulanmış hardware/GRAB ready eventleri uyuşmuyor.");
 
     await sensor.StopCaptureAsync();
-    var snap = await sensor.SnapAsync(1, timeout.Token);
+    await exposureEnded.Task.WaitAsync(timeout.Token);
+    await grabFrozen.Task.WaitAsync(timeout.Token);
+    var lowSnap = await sensor.SnapAsync(
+        new SnapRequest(1, SnapFrameMode.Low),
+        timeout.Token);
+    var lowMetadata = (await client.GetImagesAsync(timeout.Token))
+        .SingleOrDefault(image => image.ImageId == lowSnap.Id)
+        ?? throw new InvalidDataException("Remote SNAP LOW metadata bulunamadı.");
+    if (!lowMetadata.PersistedOnDevice)
+        throw new InvalidDataException("Remote SNAP LOW cihaz bilgisayarında kalıcı doğrulanmadı.");
     var completed = await snapCompleted.Task.WaitAsync(timeout.Token);
     if (completed.DeviceId != deviceId || completed.Percent != 100)
         throw new InvalidDataException("SNAP progress tamamlanma olayı geçersiz.");
     if (remoteErrors.TryPeek(out var remoteError))
         throw new InvalidOperationException($"Remote hata olayı alındı: {remoteError.Code}");
-    var low = await client.GetLowImageAsync(snap.Id, timeout.Token);
-    var rawBytes = await client.GetRawImageAsync(snap.Id, timeout.Token);
+    var lowPreview = await client.GetLowImageAsync(lowSnap.Id, timeout.Token);
+    var lowRawBytes = await client.GetRawImageAsync(lowSnap.Id, timeout.Token);
+    using var lowRawStream = new MemoryStream(lowRawBytes, writable: false);
+    var lowRaw = Gray16RawFileCodec.Read(lowRawStream);
+    if (lowRaw.AcquisitionId != lowSnap.Frame!.AcquisitionId ||
+        lowRaw.SnapFrameMode != SnapFrameMode.Low ||
+        lowSnap.Profile != AcquisitionProfile.MedicalSpecimenLikePhantom)
+        throw new InvalidDataException("Remote SNAP LOW kaynak ve metadata uyuşmuyor.");
+    if (lowSnap.RequestedParameters.VoltageKv != 70 ||
+        lowSnap.RequestedParameters.PowerW != 3500 ||
+        lowSnap.RequestedParameters.ExposureTimeMs != 1 ||
+        lowSnap.Readings.VoltageProvenance != MeasurementProvenance.AppliedTarget ||
+        lowSnap.Readings.TubeCurrentProvenance != MeasurementProvenance.Derived)
+        throw new InvalidDataException("Remote target/measured provenance sözleşmesi uyuşmuyor.");
+
+    var rawSnap = await sensor.SnapAsync(
+        new SnapRequest(1, SnapFrameMode.Raw),
+        timeout.Token);
+    var rawMetadata = (await client.GetImagesAsync(timeout.Token))
+        .SingleOrDefault(image => image.ImageId == rawSnap.Id)
+        ?? throw new InvalidDataException("Remote SNAP RAW metadata bulunamadı.");
+    if (!rawMetadata.PersistedOnDevice)
+        throw new InvalidDataException("Remote SNAP RAW cihaz bilgisayarında kalıcı doğrulanmadı.");
+    var rawBytes = await client.GetRawImageAsync(rawSnap.Id, timeout.Token);
     using var rawStream = new MemoryStream(rawBytes, writable: false);
     var raw = Gray16RawFileCodec.Read(rawStream);
-    if (raw.AcquisitionId != snap.Frame!.AcquisitionId ||
-        raw.Width != snap.Frame.Width ||
-        raw.Height != snap.Frame.Height ||
-        snap.Profile != AcquisitionProfile.MedicalSpecimenLikePhantom)
-        throw new InvalidDataException("Remote raw ve SNAP metadata uyuşmuyor.");
+    if (raw.AcquisitionId != rawSnap.Frame!.AcquisitionId ||
+        raw.SnapFrameMode != SnapFrameMode.Raw ||
+        raw.Width != rawSnap.Frame.Width ||
+        raw.Height != rawSnap.Frame.Height)
+        throw new InvalidDataException("Remote SNAP RAW kaynak ve metadata uyuşmuyor.");
 
     Console.WriteLine(
-        $"PASS device={deviceId} live={lowFrame.Width}x{lowFrame.Height}" +
-        $" lowBytes={low.Length} raw={raw.Width}x{raw.Height} rawBytes={rawBytes.Length}");
+        $"PASS device={deviceId} grab={lowFrame.Width}x{lowFrame.Height}" +
+        $" snapLow={lowRaw.Width}x{lowRaw.Height} lowPreviewBytes={lowPreview.Length}" +
+        $" snapRaw={raw.Width}x{raw.Height} rawBytes={rawBytes.Length}");
 }
 finally
 {

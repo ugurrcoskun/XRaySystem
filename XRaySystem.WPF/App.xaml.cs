@@ -22,10 +22,10 @@ namespace XRaySystem.WPF
 
         public App()
         {
-            // Beklenmeyen çökmeleri ekrana MessageBox olarak yansıt
+            // Surface unexpected UI-thread failures without silently terminating the operator session.
             this.DispatcherUnhandledException += (s, e) =>
             {
-                MessageBox.Show($"ÇALIŞMA ZAMANI HATASI:\n{e.Exception.Message}\n\nDetay:\n{e.Exception.InnerException?.Message}", "Kritik Çökme", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"RUNTIME ERROR:\n{e.Exception.Message}\n\nDetails:\n{e.Exception.InnerException?.Message}", "Critical Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 e.Handled = true;
             };
         }
@@ -41,16 +41,16 @@ namespace XRaySystem.WPF
 
                 ServiceProvider = serviceCollection.BuildServiceProvider();
 
-                // Migration'ları pencere açılmadan uygula; eski veritabanları veri kaybetmeden baseline edilir.
-                InitializeDatabase();
+                // Start database preparation in parallel so the shell can render immediately.
+                // History loading and SNAP persistence explicitly await this task.
+                DatabaseReady = Task.Run(InitializeDatabase);
 
-                // Dependency Injection üzerinden ana pencereyi ayağa kaldır
                 var mainWindow = ServiceProvider.GetRequiredService<MainWindow>();
                 mainWindow.Show();
             }
             catch (System.Exception ex)
             {
-                MessageBox.Show($"BAŞLANGIÇ HATASI:\n{ex.Message}\n\nDetay:\n{ex.InnerException?.Message}", "Başlatılamadı", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"STARTUP ERROR:\n{ex.Message}\n\nDetails:\n{ex.InnerException?.Message}", "Unable to Start", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -66,7 +66,7 @@ namespace XRaySystem.WPF
             catch (Exception ex)
             {
                 DatabaseInitializationFailure = ex;
-                MessageBox.Show($"Database initialization failed:\n{ex.Message}", "Database", MessageBoxButton.OK, MessageBoxImage.Warning);
+                throw;
             }
         }
 

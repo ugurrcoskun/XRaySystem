@@ -11,7 +11,8 @@ namespace XRaySystem.Infrastructure.Storage;
 public static class Gray16RawFileCodec
 {
     private static readonly byte[] Magic = "XRAYRAW1"u8.ToArray();
-    private const int Version = 1;
+    private const int Version = 2;
+    private const int LegacyVersion = 1;
     private const int HashLength = 32;
     private const int MaxPixelCount = 100_000_000;
     private const int MaxStringBytes = 4096;
@@ -30,6 +31,8 @@ public static class Gray16RawFileCodec
         writer.Write(frame.StrideBytes);
         writer.Write((int)frame.PixelFormat);
         writer.Write((int)frame.Kind);
+        writer.Write((int)frame.Operation);
+        writer.Write(frame.SnapFrameMode is { } snapMode ? (int)snapMode : -1);
         writer.Write(frame.Timestamp.Ticks);
         writer.Write(checked((short)frame.Timestamp.Offset.TotalMinutes));
         writer.Write(frame.AcquisitionId.ToByteArray());
@@ -62,7 +65,7 @@ public static class Gray16RawFileCodec
             throw new InvalidDataException("Dosya XRaySystem Gray16 raw biçiminde değil.");
 
         var version = reader.ReadInt32();
-        if (version != Version)
+        if (version is not (LegacyVersion or Version))
             throw new InvalidDataException($"Desteklenmeyen XRaySystem raw sürümü: {version}.");
 
         var width = reader.ReadInt32();
@@ -70,6 +73,17 @@ public static class Gray16RawFileCodec
         var strideBytes = reader.ReadInt32();
         var pixelFormat = (Gray16PixelFormat)reader.ReadInt32();
         var kind = (FrameKind)reader.ReadInt32();
+        var operation = version >= 2
+            ? (AcquisitionOperation)reader.ReadInt32()
+            : kind == FrameKind.Snap
+                ? AcquisitionOperation.Snap
+                : AcquisitionOperation.Grab;
+        var storedSnapMode = version >= 2 ? reader.ReadInt32() : -1;
+        var snapFrameMode = storedSnapMode >= 0
+            ? (SnapFrameMode?)storedSnapMode
+            : kind == FrameKind.Snap
+                ? SnapFrameMode.Raw
+                : null;
         var timestampTicks = reader.ReadInt64();
         var offsetMinutes = reader.ReadInt16();
         if (offsetMinutes is < -840 or > 840)
@@ -124,7 +138,9 @@ public static class Gray16RawFileCodec
                 sourceMarker,
                 sourceStride >= 0 ? sourceStride : null,
                 sourceEndian,
-                sourceOrientation);
+                sourceOrientation,
+                operation,
+                snapFrameMode);
         }
         catch (ArgumentException ex)
         {

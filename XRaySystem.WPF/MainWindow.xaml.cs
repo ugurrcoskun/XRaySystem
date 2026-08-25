@@ -181,7 +181,7 @@ namespace XRaySystem.WPF
         }
 
         private void XRayImage_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e) =>
-            MainPointerCoordinateText.Text = "İMLEÇ X: —  Y: —";
+            MainPointerCoordinateText.Text = "POINTER X: —  Y: —";
 
         private void XRayImage_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
@@ -255,22 +255,22 @@ namespace XRaySystem.WPF
         {
             var center = new Point(XRayScanBorder.ActualWidth / 2.0, XRayScanBorder.ActualHeight / 2.0);
             MainCenterCoordinateText.Text = TryViewportToImagePixel(center, out var x, out var y)
-                ? $"MERKEZ X: {x}  Y: {y}"
-                : "MERKEZ X: —  Y: —";
+                ? $"CENTER X: {x}  Y: {y}"
+                : "CENTER X: —  Y: —";
         }
 
         private void UpdateMainPointerCoordinate(Point point)
         {
             MainPointerCoordinateText.Text = TryViewportToImagePixel(point, out var x, out var y)
-                ? $"İMLEÇ X: {x}  Y: {y}"
-                : "İMLEÇ X: —  Y: —";
+                ? $"POINTER X: {x}  Y: {y}"
+                : "POINTER X: —  Y: —";
         }
 
         private void FocusCoordinate_Click(object sender, RoutedEventArgs e)
         {
             if (XRayImage.Source is not BitmapSource bitmap)
             {
-                MainCoordinateValidationText.Text = "Önce görüntü açın.";
+                MainCoordinateValidationText.Text = "Open an image first.";
                 return;
             }
 
@@ -344,8 +344,8 @@ namespace XRaySystem.WPF
             if (string.IsNullOrEmpty(item.ImagePath) || !System.IO.File.Exists(item.ImagePath))
             {
                 MessageBox.Show(
-                    $"Görüntü dosyası bulunamadı.\nAranan yol: {item.ImagePath ?? "(boş)"}",
-                    "Hata",
+                    $"Image file not found.\nRequested path: {item.ImagePath ?? "(empty)"}",
+                    "Error",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
                 return;
@@ -354,15 +354,15 @@ namespace XRaySystem.WPF
             try
             {
                 vm.LoadHistoryTiff(item.ImagePath, item);
-                vm.ImageStatusBadgeText  = $"📁 GEÇMİŞ İNCELEME: {item.Voltage:F0} kV · {item.PowerW:F0} W ({item.Timestamp:yyyy-MM-dd HH:mm:ss})";
+                vm.ImageStatusBadgeText  = $"HISTORY REVIEW: {item.Voltage:F0} kV · {item.PowerW:F0} W ({item.Timestamp:yyyy-MM-dd HH:mm:ss})";
                 vm.ImageStatusBadgeColor = "#00F0FF";
                 ResetImageView();
             }
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    $"Görüntü yüklenemedi:\n{ex.Message}",
-                    "Hata",
+                    $"Unable to load image:\n{ex.Message}",
+                    "Error",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
             }
@@ -393,12 +393,12 @@ namespace XRaySystem.WPF
                 }
                 else
                 {
-                    MessageBox.Show($"Görüntü Klasörü Yolu:\n{folderPath}", "Klasör Yolu");
+                    MessageBox.Show($"Image folder path:\n{folderPath}", "Folder Path");
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Klasör açılamadı:\n{ex.Message}\n\nKlasör Yolu:\n{folderPath}", "Bilgi");
+                MessageBox.Show($"Unable to open folder:\n{ex.Message}\n\nFolder path:\n{folderPath}", "Information");
             }
         }
 
@@ -410,7 +410,7 @@ namespace XRaySystem.WPF
             if (sender is not FrameworkElement el || el.DataContext is not XRaySystem.Application.DTOs.SensorDataDto item) return;
             if (string.IsNullOrEmpty(item.ImagePath) || !System.IO.File.Exists(item.ImagePath))
             {
-                MessageBox.Show("Dosya henüz kaydedilmemiş veya silinmiş.", "Hata");
+                MessageBox.Show("The file has not been saved yet or was deleted.", "Error");
                 return;
             }
 
@@ -426,12 +426,12 @@ namespace XRaySystem.WPF
                 }
                 else
                 {
-                    MessageBox.Show($"Dosya Yolu:\n{item.ImagePath}", "Dosya Yolu");
+                    MessageBox.Show($"File path:\n{item.ImagePath}", "File Path");
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Dosya konumu açılamadı:\n{ex.Message}", "Hata");
+                MessageBox.Show($"Unable to open file location:\n{ex.Message}", "Error");
             }
         }
 
@@ -443,7 +443,7 @@ namespace XRaySystem.WPF
             if (sender is not FrameworkElement el || el.DataContext is not XRaySystem.Application.DTOs.SensorDataDto item) return;
             if (string.IsNullOrEmpty(item.ImagePath) || !System.IO.File.Exists(item.ImagePath))
             {
-                MessageBox.Show("Dışa aktarılacak dosya bulunamadı.", "Hata");
+                MessageBox.Show("No file is available to export.", "Error");
                 return;
             }
 
@@ -451,7 +451,7 @@ namespace XRaySystem.WPF
             {
                 FileName = $"image_{item.Voltage:F0}kV_{item.PowerW:F0}W_{item.ExposureTime:F0}ms_{item.Timestamp:yyyyMMdd_HHmmss}.tiff",
                 DefaultExt = ".tiff",
-                Filter = "TIFF Görüntü Dosyası (*.tiff;*.tif)|*.tiff;*.tif|Tüm Dosyalar (*.*)|*.*"
+                Filter = "TIFF Image (*.tiff;*.tif)|*.tiff;*.tif|All Files (*.*)|*.*"
             };
 
             if (dialog.ShowDialog() == true)
@@ -459,11 +459,11 @@ namespace XRaySystem.WPF
                 try
                 {
                     System.IO.File.Copy(item.ImagePath, dialog.FileName, overwrite: true);
-                    MessageBox.Show($"Görüntü başarıyla aktarıldı:\n{dialog.FileName}", "Başarılı", MessageBoxButton.OK, MessageBoxImage.Information);
+                    MessageBox.Show($"Image exported successfully:\n{dialog.FileName}", "Export Complete", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show($"Dosya kopyalanamadı:\n{ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show($"Unable to copy file:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
         }
@@ -478,7 +478,7 @@ namespace XRaySystem.WPF
             if (btn.DataContext is not XRaySystem.Application.DTOs.SensorDataDto item) return;
             if (string.IsNullOrEmpty(item.ImagePath) || !File.Exists(item.ImagePath))
             {
-                MessageBox.Show("Görüntü dosyası henüz kaydedilmemiş.", "Bilgi");
+                MessageBox.Show("The image file has not been saved yet.", "Information");
                 return;
             }
 
@@ -494,7 +494,7 @@ namespace XRaySystem.WPF
             {
                 if (_comparisonSelection.Count >= 4)
                 {
-                    MessageBox.Show("Maksimum 4 görsel seçebilirsiniz.", "Sınır Aşıldı");
+                    MessageBox.Show("You can select up to 4 images.", "Selection Limit");
                     return;
                 }
 

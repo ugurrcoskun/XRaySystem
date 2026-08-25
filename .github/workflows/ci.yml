@@ -32,6 +32,34 @@ jobs:
       - name: Test
         run: dotnet test XRaySystem.Tests/XRaySystem.Tests.csproj --configuration Release --no-restore --disable-build-servers -m:1
 
+      - name: Check vulnerable dependencies
+        run: dotnet list XRaySystem.Tests/XRaySystem.Tests.csproj package --vulnerable --include-transitive --no-restore
+
+  android-build:
+    name: Android MAUI build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Android MAUI workload
+        run: dotnet workload install maui-android
+
+      - name: Restore Android target
+        run: dotnet restore XRaySystem.Mobile/XRaySystem.Mobile.csproj -p:TargetFramework=net10.0-android
+
+      - name: Build Android target
+        run: dotnet build XRaySystem.Mobile/XRaySystem.Mobile.csproj --framework net10.0-android --configuration Release --no-restore --disable-build-servers -m:1
+
+      - name: Check vulnerable Android dependencies
+        run: dotnet list XRaySystem.Mobile/XRaySystem.Mobile.csproj package --framework net10.0-android --vulnerable --include-transitive --no-restore
+
   windows-wpf:
     name: Windows WPF build and tests
     runs-on: windows-latest
@@ -46,6 +74,9 @@ jobs:
             8.0.x
             10.0.x
 
+      - name: Install Windows MAUI workload
+        run: dotnet workload install maui-windows
+
       - name: Restore
         run: dotnet restore XRaySystem.WPF.Tests/XRaySystem.WPF.Tests.csproj
 
@@ -54,3 +85,47 @@ jobs:
 
       - name: Test Gray16 TIFF storage
         run: dotnet test XRaySystem.WPF.Tests/XRaySystem.WPF.Tests.csproj --configuration Release --no-restore --disable-build-servers -m:1
+
+      - name: Restore MAUI Windows target
+        run: dotnet restore XRaySystem.Mobile/XRaySystem.Mobile.csproj -p:TargetFramework=net10.0-windows10.0.19041.0
+
+      - name: Build MAUI Windows target
+        run: dotnet build XRaySystem.Mobile/XRaySystem.Mobile.csproj --framework net10.0-windows10.0.19041.0 --configuration Release --no-restore --disable-build-servers -m:1
+
+  sbom:
+    name: DeviceHost SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish DeviceHost
+        run: dotnet publish XRaySystem.DeviceHost/XRaySystem.DeviceHost.csproj --configuration Release --output artifacts/devicehost --disable-build-servers -m:1
+
+      - name: Install pinned Microsoft SBOM tool
+        run: dotnet tool install Microsoft.Sbom.DotNetTool --version 4.1.5 --tool-path .tools/sbom
+
+      - name: Generate SPDX SBOM
+        run: >-
+          .tools/sbom/sbom-tool generate
+          -b artifacts/devicehost
+          -bc .
+          -pn XRaySystem.DeviceHost
+          -pv 0.1.0-preclinical
+          -ps XRaySystem
+          -nsb https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Upload DeviceHost and SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: devicehost-sbom-${{ github.sha }}
+          path: artifacts/devicehost
+          if-no-files-found: error
+          retention-days: 30

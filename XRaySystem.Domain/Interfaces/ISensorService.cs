@@ -22,6 +22,17 @@ public interface ISensorService
     Task DisconnectAsync();
     Task StartCaptureAsync();
     Task StopCaptureAsync();
+    Task AbortAsync() => StopCaptureAsync();
     Task<XRayMeasurement> SnapAsync(double exposureTime, CancellationToken cancellationToken = default);
+    Task<XRayMeasurement> SnapAsync(
+        SnapRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+        if (request.FrameMode != SnapFrameMode.Raw)
+            throw new NotSupportedException("Bu sensör adapter'ı SNAP LOW modunu desteklemiyor.");
+        return SnapAsync(request.ExposureTimeMs, cancellationToken);
+    }
     Task ResumeLiveAsync();
 }

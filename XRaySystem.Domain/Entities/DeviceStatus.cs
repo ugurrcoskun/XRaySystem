@@ -4,7 +4,8 @@ public enum DeviceStatus
 {
     Disconnected,
     Connected,
-    Capturing,
+    Grabbing,
+    Capturing = Grabbing,
     Snapping,
     Frozen,
     Error

@@ -14,7 +14,7 @@ using XRaySystem.Domain.ValueObjects;
 namespace XRaySystem.Infrastructure.Sensors;
 
 /// <summary>
-/// ISensorService implementasyonu: Gerçek DICOM'dan dönüştürülmüş
+/// ISensorService implementasyonu: DICOM'dan türetilmiş karantina/test
 /// .raw (ushort little-endian) dosyalarını diskten okuyarak X-Ray simülasyonunu sağlar.
 ///
 /// Kullanım:
@@ -304,11 +304,12 @@ public sealed class DiskImageSensorService : ISensorService, IDisposable
                 DateTimeOffset.UtcNow,
                 Guid.NewGuid(),
                 new AcquisitionSettings(readings.TubeCurrent, readings.Voltage, exposureTime, Profile),
-                "DiskImageSensor",
+                "DiskImageSensor:QuarantinedSample",
                 SnapWidth * 2, "little", "top-left");
 
             CurrentStatus = DeviceStatus.Frozen;
-            return new XRayMeasurement(readings, frame, isSimulator: false); // Gerçek DICOM verisi!
+            // Dosyadan türetilen/quarantine görüntü hiçbir zaman gerçek cihaz acquisition'ı sayılmaz.
+            return new XRayMeasurement(readings, frame, isSimulator: true);
         }
         finally
         {
@@ -375,10 +376,10 @@ public sealed class DiskImageSensorService : ISensorService, IDisposable
                     DateTimeOffset.UtcNow,
                     Guid.NewGuid(),
                     new AcquisitionSettings(readings.TubeCurrent, readings.Voltage, liveExposure, Profile),
-                    "DiskImageSensor",
+                    "DiskImageSensor:QuarantinedSample",
                     LiveWidth * 2, "little", "top-left");
 
-                var measurement = new XRayMeasurement(readings, frame, isSimulator: false);
+                var measurement = new XRayMeasurement(readings, frame, isSimulator: true);
                 if (token.IsCancellationRequested || generation != Volatile.Read(ref _producerGeneration))
                     break;
                 if (!PublishMeasurement(measurement))

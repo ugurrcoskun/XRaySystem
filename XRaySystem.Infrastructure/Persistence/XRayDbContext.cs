@@ -29,6 +29,7 @@ public class XRayDbContext : DbContext
 
         // Value Object konfigürasyonu (Owned Type)
         modelBuilder.Entity<XRayMeasurement>().OwnsOne(x => x.Readings);
+        modelBuilder.Entity<XRayMeasurement>().OwnsOne(x => x.RequestedParameters);
         
         modelBuilder.Entity<XRayMeasurement>().HasKey(x => x.Id);
 

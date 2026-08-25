@@ -81,6 +81,17 @@ public sealed class DeviceSecurityOptionsTests
         Assert.Null(options.FindCredential(null));
     }
 
+    [Theory]
+    [InlineData("user\nspoof")]
+    [InlineData("")]
+    public void Invalid_or_log_injection_subject_is_rejected(string subject)
+    {
+        var options = CreateOptions(DeviceRoles.Operator);
+        options.ApiKeys[0].Subject = subject;
+
+        Assert.False(options.IsValid(out _));
+    }
+
     private static DeviceSecurityOptions CreateOptions(string role, string? key = null) => new()
     {
         AuthenticationEnabled = true,

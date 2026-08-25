@@ -1,4 +1,5 @@
 using Microsoft.Maui.Controls;
+using XRaySystem.Mobile.Imaging;
 using XRaySystem.Mobile.ViewModels;
 
 namespace XRaySystem.Mobile;
@@ -10,9 +11,10 @@ public partial class MainPage : ContentPage
     private const double NumericSafetyImageScale = 1_000_000.0;
     private const double ZoomFactor = 1.25;
     private const double CoordinateFocusScale = 8.0;
+    private const double ReturnToFitSnapScale = 1.02;
 
     private readonly MainViewModel _viewModel;
-    private bool? _isWideLayout;
+    private readonly PixelGridDrawable _fullScreenPixelGridDrawable = new();
     private double _pinchStartScale = MinimumImageScale;
     private double _panStartX;
     private double _panStartY;
@@ -20,16 +22,38 @@ public partial class MainPage : ContentPage
     private double _fullScreenPanStartX;
     private double _fullScreenPanStartY;
 #if ANDROID
+    private const string AndroidPresentationFailureMessage =
+        "The new GRAB frame could not be displayed; the latest valid image is preserved.";
+
+    private sealed record AndroidPresentationFrame(
+        byte[] BmpBytes,
+        int Width,
+        int Height,
+        long Version);
+
+    private readonly object _androidPresentationGate = new();
     private Android.Widget.ImageView? _androidImageView;
     private Android.Widget.ImageView? _androidFullScreenImageView;
-    private Android.Views.ScaleGestureDetector? _androidFullScreenScaleDetector;
+    private Android.Views.View? _androidFullScreenViewportView;
     private float _androidLastPanX;
     private float _androidLastPanY;
+    private bool _androidIsPinching;
+    private float _androidPinchStartDistance;
+    private double _androidPinchStartScale;
+    private double _androidPinchAnchorX;
+    private double _androidPinchAnchorY;
+    private Android.Graphics.Bitmap? _androidDisplayedBitmap;
+    private AndroidPresentationFrame? _androidPendingPresentationFrame;
+    private bool _androidPresentationWorkerRunning;
+    private bool _androidPresentationStopping;
+    private long _androidLastPresentedVersion;
+    private long _androidPresentationVersion;
 #endif
 
     public MainPage(MainViewModel viewModel)
     {
         InitializeComponent();
+        FullScreenPixelGrid.Drawable = _fullScreenPixelGridDrawable;
         SensorImage.GestureRecognizers.Remove(ImagePanGesture);
         _viewModel = viewModel;
         BindingContext = viewModel;
@@ -39,14 +63,20 @@ public partial class MainPage : ContentPage
         ConfigureWindowsScrollViewer();
 #endif
 #if ANDROID
+        // Android'in asenkron ImageSource/Glide değişimi eski drawable'ı yeni kare hazır
+        // olmadan temizleyebilir. Native presenter son geçerli bitmap'i atomik değiştirir.
+        SensorImage.RemoveBinding(Image.SourceProperty);
+        FullScreenSensorImage.RemoveBinding(Image.SourceProperty);
+        SensorImage.Source = null;
+        FullScreenSensorImage.Source = null;
+        _viewModel.PresentationFrameReady += OnAndroidPresentationFrameReady;
         FullScreenSensorImage.GestureRecognizers.Remove(FullScreenPinchGesture);
         FullScreenSensorImage.GestureRecognizers.Remove(FullScreenPanGesture);
         SensorImage.HandlerChanged += OnSensorImageHandlerChanged;
         FullScreenSensorImage.HandlerChanged += OnFullScreenSensorImageHandlerChanged;
-        SensorImage.PropertyChanged += OnAndroidImagePropertyChanged;
-        FullScreenSensorImage.PropertyChanged += OnAndroidImagePropertyChanged;
+        FullScreenImageViewport.HandlerChanged += OnFullScreenImageViewportHandlerChanged;
         ConfigureAndroidImageGestures();
-        ConfigureAndroidFullScreenImage();
+        ConfigureAndroidFullScreenViewport();
 #endif
     }
 
@@ -69,7 +99,11 @@ public partial class MainPage : ContentPage
             FullScreenCoordinateXEntry.Text = (_viewModel.CurrentFrameWidth / 2).ToString();
             FullScreenCoordinateYEntry.Text = (_viewModel.CurrentFrameHeight / 2).ToString();
         }
-        Dispatcher.Dispatch(UpdateFullScreenCoordinateReadout);
+        Dispatcher.Dispatch(() =>
+        {
+            UpdateFullScreenCoordinateReadout();
+            UpdateFullScreenPixelGrid();
+        });
 #if ANDROID
         ConfigureAndroidPixelRendering(_androidFullScreenImageView);
 #endif
@@ -185,8 +219,11 @@ public partial class MainPage : ContentPage
     private void OnFullScreenResetZoomClicked(object? sender, EventArgs e) =>
         ResetFullScreenImageTransform();
 
-    private void OnFullScreenImageSizeChanged(object? sender, EventArgs e) =>
+    private void OnFullScreenImageSizeChanged(object? sender, EventArgs e)
+    {
         UpdateFullScreenCoordinateReadout();
+        UpdateFullScreenPixelGrid();
+    }
 
     private async void OnReviewImageOpened()
     {
@@ -220,6 +257,8 @@ public partial class MainPage : ContentPage
     {
         var oldScale = Math.Max(MinimumImageScale, FullScreenSensorImage.Scale);
         var newScale = NormalizeImageScale(requestedScale);
+        var translationX = FullScreenSensorImage.TranslationX;
+        var translationY = FullScreenSensorImage.TranslationY;
         if (focusPoint is Point focus &&
             FullScreenSensorImage.Width > 0 && FullScreenSensorImage.Height > 0 &&
             Math.Abs(newScale - oldScale) > double.Epsilon)
@@ -228,25 +267,44 @@ public partial class MainPage : ContentPage
             var originY = FullScreenSensorImage.Height / 2.0;
             var localX = (focus.X - originX - FullScreenSensorImage.TranslationX) / oldScale + originX;
             var localY = (focus.Y - originY - FullScreenSensorImage.TranslationY) / oldScale + originY;
-            FullScreenSensorImage.TranslationX =
+            translationX =
                 focus.X - originX - (localX - originX) * newScale;
-            FullScreenSensorImage.TranslationY =
+            translationY =
                 focus.Y - originY - (localY - originY) * newScale;
         }
 
+        ApplyFullScreenImageTransform(newScale, translationX, translationY);
+    }
+
+    private void ApplyFullScreenImageTransform(
+        double requestedScale,
+        double requestedTranslationX,
+        double requestedTranslationY)
+    {
+        var newScale = NormalizeImageScale(requestedScale);
+        if (newScale <= ReturnToFitSnapScale)
+            newScale = MinimumImageScale;
+
         FullScreenSensorImage.Scale = newScale;
-        if (FullScreenSensorImage.Scale <= MinimumImageScale)
+        if (newScale <= MinimumImageScale)
         {
             FullScreenSensorImage.TranslationX = 0;
             FullScreenSensorImage.TranslationY = 0;
         }
         else
         {
+            FullScreenSensorImage.TranslationX = double.IsFinite(requestedTranslationX)
+                ? requestedTranslationX
+                : 0;
+            FullScreenSensorImage.TranslationY = double.IsFinite(requestedTranslationY)
+                ? requestedTranslationY
+                : 0;
             ClampFullScreenImageTranslation();
         }
 
-        FullScreenZoomLevelLabel.Text = $"{Math.Round(FullScreenSensorImage.Scale * 100):F0}%";
+        FullScreenZoomLevelLabel.Text = $"{Math.Round(newScale * 100):F0}%";
         UpdateFullScreenCoordinateReadout();
+        UpdateFullScreenPixelGrid();
     }
 
     private static double NormalizeImageScale(double requestedScale)
@@ -267,30 +325,57 @@ public partial class MainPage : ContentPage
 
     private void ResetFullScreenImageTransform()
     {
+#if ANDROID
+        _androidIsPinching = false;
+#endif
         FullScreenSensorImage.Scale = MinimumImageScale;
         FullScreenSensorImage.TranslationX = 0;
         FullScreenSensorImage.TranslationY = 0;
         FullScreenZoomLevelLabel.Text = "100%";
         UpdateFullScreenCoordinateReadout();
+        UpdateFullScreenPixelGrid();
     }
 
     private void ClampImageTranslation()
     {
-        var maximumX = Math.Max(0, SensorImage.Width * (SensorImage.Scale - 1) / 2);
-        var maximumY = Math.Max(0, SensorImage.Height * (SensorImage.Scale - 1) / 2);
+        var (maximumX, maximumY) = GetAspectFitTranslationBounds(
+            SensorImage.Width,
+            SensorImage.Height,
+            SensorImage.Scale);
         SensorImage.TranslationX = Math.Clamp(SensorImage.TranslationX, -maximumX, maximumX);
         SensorImage.TranslationY = Math.Clamp(SensorImage.TranslationY, -maximumY, maximumY);
     }
 
     private void ClampFullScreenImageTranslation()
     {
-        var maximumX = Math.Max(0, FullScreenSensorImage.Width * (FullScreenSensorImage.Scale - 1) / 2);
-        var maximumY = Math.Max(0, FullScreenSensorImage.Height * (FullScreenSensorImage.Scale - 1) / 2);
+        var (maximumX, maximumY) = GetAspectFitTranslationBounds(
+            FullScreenSensorImage.Width,
+            FullScreenSensorImage.Height,
+            FullScreenSensorImage.Scale);
         FullScreenSensorImage.TranslationX =
             Math.Clamp(FullScreenSensorImage.TranslationX, -maximumX, maximumX);
         FullScreenSensorImage.TranslationY =
             Math.Clamp(FullScreenSensorImage.TranslationY, -maximumY, maximumY);
         UpdateFullScreenCoordinateReadout();
+        UpdateFullScreenPixelGrid();
+    }
+
+    private (double MaximumX, double MaximumY) GetAspectFitTranslationBounds(
+        double viewportWidth,
+        double viewportHeight,
+        double scale)
+    {
+        var pixelWidth = _viewModel.CurrentFrameWidth;
+        var pixelHeight = _viewModel.CurrentFrameHeight;
+        if (viewportWidth <= 0 || viewportHeight <= 0 || pixelWidth <= 0 || pixelHeight <= 0)
+            return (0, 0);
+
+        var fitScale = Math.Min(viewportWidth / pixelWidth, viewportHeight / pixelHeight);
+        var scaledContentWidth = pixelWidth * fitScale * scale;
+        var scaledContentHeight = pixelHeight * fitScale * scale;
+        return (
+            Math.Max(0, (scaledContentWidth - viewportWidth) / 2.0),
+            Math.Max(0, (scaledContentHeight - viewportHeight) / 2.0));
     }
 
     private void OnFullScreenFocusCoordinateClicked(object? sender, EventArgs e)
@@ -303,8 +388,8 @@ public partial class MainPage : ContentPage
             pixelX < 0 || pixelX >= width || pixelY < 0 || pixelY >= height)
         {
             FullScreenCenterCoordinateLabel.Text = width > 0 && height > 0
-                ? $"GEÇERSİZ · X: 0–{width - 1}  Y: 0–{height - 1}"
-                : "GÖRÜNTÜ BOYUTU BULUNAMADI";
+                ? $"INVALID · X: 0–{width - 1}  Y: 0–{height - 1}"
+                : "IMAGE DIMENSIONS UNAVAILABLE";
             return;
         }
 
@@ -337,6 +422,7 @@ public partial class MainPage : ContentPage
         FullScreenSensorImage.TranslationY = -(localY - originY) * FullScreenSensorImage.Scale;
         FullScreenZoomLevelLabel.Text = $"{Math.Round(FullScreenSensorImage.Scale * 100):F0}%";
         UpdateFullScreenCoordinateReadout();
+        UpdateFullScreenPixelGrid();
     }
 
     private bool TryFullScreenViewportToImagePixel(Point viewportPoint, out int pixelX, out int pixelY)
@@ -381,27 +467,257 @@ public partial class MainPage : ContentPage
             FullScreenSensorImage.Height / 2.0);
         FullScreenCenterCoordinateLabel.Text =
             TryFullScreenViewportToImagePixel(center, out var x, out var y)
-                ? $"MERKEZ X: {x}  Y: {y}"
-                : "MERKEZ X: —  Y: —";
+                ? $"CENTER X: {x}  Y: {y}"
+                : "CENTER X: —  Y: —";
+    }
+
+    private void UpdateFullScreenPixelGrid()
+    {
+        if (FullScreenPixelGrid is null)
+            return;
+
+#if ANDROID
+        if (!AndroidDecodedBitmapMatchesFrame())
+        {
+            FullScreenPixelGrid.IsVisible = false;
+            return;
+        }
+#endif
+
+        var isVisible = _fullScreenPixelGridDrawable.Configure(
+            _viewModel.CurrentFrameWidth,
+            _viewModel.CurrentFrameHeight,
+            FullScreenSensorImage.Width,
+            FullScreenSensorImage.Height,
+            FullScreenSensorImage.Scale,
+            FullScreenSensorImage.TranslationX,
+            FullScreenSensorImage.TranslationY);
+        FullScreenPixelGrid.IsVisible = isVisible;
+        if (isVisible)
+            FullScreenPixelGrid.Invalidate();
     }
 
 #if ANDROID
+    private bool AndroidDecodedBitmapMatchesFrame()
+    {
+        var imageView = _androidFullScreenImageView ??
+            FullScreenSensorImage.Handler?.PlatformView as Android.Widget.ImageView;
+        if (imageView?.Drawable is not Android.Graphics.Drawables.BitmapDrawable bitmapDrawable ||
+            bitmapDrawable.Bitmap is not { } bitmap)
+            return false;
+
+        return bitmap.Width == _viewModel.CurrentFrameWidth &&
+               bitmap.Height == _viewModel.CurrentFrameHeight;
+    }
+
+    private void OnAndroidPresentationFrameReady(byte[] bmpBytes, int width, int height)
+    {
+        var version = Interlocked.Increment(ref _androidPresentationVersion);
+        var startWorker = false;
+        lock (_androidPresentationGate)
+        {
+            if (_androidPresentationStopping)
+                return;
+
+            // Bounded latest-frame buffer: geciken kareler birikmez. Üretici hızlıysa
+            // bekleyen kare atomik olarak yenisiyle değiştirilir.
+            _androidPendingPresentationFrame =
+                new AndroidPresentationFrame(bmpBytes, width, height, version);
+            if (!_androidPresentationWorkerRunning)
+            {
+                _androidPresentationWorkerRunning = true;
+                startWorker = true;
+            }
+        }
+
+        if (startWorker)
+            _ = Task.Run(ProcessAndroidPresentationFrames);
+    }
+
+    private void ProcessAndroidPresentationFrames()
+    {
+        while (true)
+        {
+            AndroidPresentationFrame frame;
+            lock (_androidPresentationGate)
+            {
+                if (_androidPendingPresentationFrame is null)
+                {
+                    _androidPresentationWorkerRunning = false;
+                    return;
+                }
+
+                frame = _androidPendingPresentationFrame;
+                _androidPendingPresentationFrame = null;
+            }
+
+            DecodeAndPresentAndroidFrame(
+                frame.BmpBytes,
+                frame.Width,
+                frame.Height,
+                frame.Version);
+        }
+    }
+
+    private void DecodeAndPresentAndroidFrame(byte[] bmpBytes, int width, int height, long version)
+    {
+        Android.Graphics.Bitmap? bitmap = null;
+        try
+        {
+            using var options = new Android.Graphics.BitmapFactory.Options
+            {
+                InScaled = false,
+                InSampleSize = 1
+            };
+            bitmap = Android.Graphics.BitmapFactory.DecodeByteArray(
+                bmpBytes,
+                0,
+                bmpBytes.Length,
+                options);
+            if (bitmap is null || bitmap.Width != width || bitmap.Height != height)
+            {
+                bitmap?.Dispose();
+                ReportAndroidPresentationFailure(version);
+                return;
+            }
+
+            lock (_androidPresentationGate)
+            {
+                if (_androidPresentationStopping)
+                {
+                    bitmap.Dispose();
+                    bitmap = null;
+                    return;
+                }
+            }
+
+            var readyBitmap = bitmap;
+            bitmap = null;
+            // İşçi UI teslimi tamamlanana kadar ilerlemez. Böylece hem encoded-frame
+            // yuvası hem de UI teslim kuyruğu sabit boyutlu kalır.
+            try
+            {
+                MainThread.InvokeOnMainThreadAsync(() =>
+                        PresentDecodedAndroidFrame(readyBitmap, version))
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch
+            {
+                readyBitmap.Dispose();
+                ReportAndroidPresentationFailure(version);
+            }
+        }
+        catch
+        {
+            bitmap?.Dispose();
+            ReportAndroidPresentationFailure(version);
+        }
+    }
+
+    private void PresentDecodedAndroidFrame(Android.Graphics.Bitmap bitmap, long version)
+    {
+        if (version <= Volatile.Read(ref _androidLastPresentedVersion))
+        {
+            bitmap.Dispose();
+            return;
+        }
+
+        var previous = _androidDisplayedBitmap;
+        try
+        {
+            ApplyAndroidBitmap(_androidImageView, bitmap);
+            ApplyAndroidBitmap(_androidFullScreenImageView, bitmap);
+        }
+        catch
+        {
+            // İki viewer'dan biri güncellenemezse diğerini de önceki doğrulanmış
+            // bitmap'e döndür; yarım kare değişimi bırakma.
+            TryRestoreAndroidBitmap(_androidImageView, previous);
+            TryRestoreAndroidBitmap(_androidFullScreenImageView, previous);
+            throw;
+        }
+
+        _androidDisplayedBitmap = bitmap;
+        Volatile.Write(ref _androidLastPresentedVersion, version);
+        previous?.Dispose();
+        if (_viewModel.StatusMessage == AndroidPresentationFailureMessage)
+            _viewModel.StatusMessage = _viewModel.Status == XRaySystem.Domain.Entities.DeviceStatus.Grabbing
+                ? "GRAB active · latest-frame mode enabled."
+                : "Image presentation refreshed.";
+        UpdateFullScreenPixelGrid();
+    }
+
+    private void ReportAndroidPresentationFailure(long version)
+    {
+        try
+        {
+            MainThread.InvokeOnMainThreadAsync(() =>
+                {
+                    if (Volatile.Read(ref _androidLastPresentedVersion) < version)
+                        _viewModel.StatusMessage = AndroidPresentationFailureMessage;
+                })
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch
+        {
+            // Window kapanıyorsa UI dispatcher artık teslim alamayabilir. Son bitmap
+            // değiştirilmediği için burada ek bir boş/yanlış görüntü sunulmaz.
+        }
+    }
+
+    private void ApplyAndroidDisplayedBitmap(Android.Widget.ImageView? imageView)
+    {
+        if (imageView is null || _androidDisplayedBitmap is null)
+            return;
+
+        ApplyAndroidBitmap(imageView, _androidDisplayedBitmap);
+    }
+
+    private static void ApplyAndroidBitmap(
+        Android.Widget.ImageView? imageView,
+        Android.Graphics.Bitmap bitmap)
+    {
+        if (imageView is null)
+            return;
+
+        imageView.SetImageBitmap(bitmap);
+        ConfigureAndroidPixelRendering(imageView);
+    }
+
+    private static void TryRestoreAndroidBitmap(
+        Android.Widget.ImageView? imageView,
+        Android.Graphics.Bitmap? bitmap)
+    {
+        try
+        {
+            if (imageView is null)
+                return;
+
+            if (bitmap is null)
+                imageView.SetImageDrawable(null);
+            else
+                ApplyAndroidBitmap(imageView, bitmap);
+        }
+        catch
+        {
+            // Presenter hatası raporlanır; kurtarma denemesi ana hatayı gölgelememeli.
+        }
+    }
+
     private void OnSensorImageHandlerChanged(object? sender, EventArgs e) =>
         ConfigureAndroidImageGestures();
 
-    private void OnFullScreenSensorImageHandlerChanged(object? sender, EventArgs e) =>
-        ConfigureAndroidFullScreenImage();
-
-    private void OnAndroidImagePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    private void OnFullScreenSensorImageHandlerChanged(object? sender, EventArgs e)
     {
-        if (e.PropertyName != Image.SourceProperty.PropertyName)
-            return;
-
-        if (ReferenceEquals(sender, SensorImage))
-            ConfigureAndroidPixelRendering(_androidImageView);
-        else if (ReferenceEquals(sender, FullScreenSensorImage))
-            ConfigureAndroidPixelRendering(_androidFullScreenImageView);
+        _androidFullScreenImageView =
+            FullScreenSensorImage.Handler?.PlatformView as Android.Widget.ImageView;
+        ApplyAndroidDisplayedBitmap(_androidFullScreenImageView);
     }
+
+    private void OnFullScreenImageViewportHandlerChanged(object? sender, EventArgs e) =>
+        ConfigureAndroidFullScreenViewport();
 
     private void ConfigureAndroidImageGestures()
     {
@@ -412,25 +728,25 @@ public partial class MainPage : ContentPage
         if (_androidImageView is not null)
         {
             _androidImageView.Touch += OnAndroidImageTouch;
-            ConfigureAndroidPixelRendering(_androidImageView);
+            ApplyAndroidDisplayedBitmap(_androidImageView);
         }
     }
 
-    private void ConfigureAndroidFullScreenImage()
+    private void ConfigureAndroidFullScreenViewport()
     {
-        if (_androidFullScreenImageView is not null)
-            _androidFullScreenImageView.Touch -= OnAndroidFullScreenImageTouch;
+        if (_androidFullScreenViewportView is not null)
+            _androidFullScreenViewportView.Touch -= OnAndroidFullScreenViewportTouch;
 
-        _androidFullScreenImageView =
-            FullScreenSensorImage.Handler?.PlatformView as Android.Widget.ImageView;
-        if (_androidFullScreenImageView is null)
+        _androidFullScreenViewportView =
+            FullScreenImageViewport.Handler?.PlatformView as Android.Views.View;
+        if (_androidFullScreenViewportView is null)
             return;
 
-        _androidFullScreenScaleDetector = new Android.Views.ScaleGestureDetector(
-            _androidFullScreenImageView.Context,
-            new FullScreenScaleListener(this));
-        _androidFullScreenImageView.Touch += OnAndroidFullScreenImageTouch;
-        ConfigureAndroidPixelRendering(_androidFullScreenImageView);
+        _androidFullScreenViewportView.Clickable = true;
+        _androidFullScreenViewportView.Touch += OnAndroidFullScreenViewportTouch;
+        _androidFullScreenImageView =
+            FullScreenSensorImage.Handler?.PlatformView as Android.Widget.ImageView;
+        ApplyAndroidDisplayedBitmap(_androidFullScreenImageView);
     }
 
     private static void ConfigureAndroidPixelRendering(Android.Widget.ImageView? imageView)
@@ -438,12 +754,11 @@ public partial class MainPage : ContentPage
         imageView?.Drawable?.SetFilterBitmap(false);
     }
 
-    private void OnAndroidFullScreenImageTouch(object? sender, Android.Views.View.TouchEventArgs e)
+    private void OnAndroidFullScreenViewportTouch(object? sender, Android.Views.View.TouchEventArgs e)
     {
-        if (sender is not Android.Views.View imageView || e.Event is null)
+        if (sender is not Android.Views.View viewport || e.Event is null)
             return;
 
-        _androidFullScreenScaleDetector?.OnTouchEvent(e.Event);
         var action = e.Event.ActionMasked;
         var density = Microsoft.Maui.Devices.DeviceDisplay.MainDisplayInfo.Density;
         switch (action)
@@ -451,12 +766,24 @@ public partial class MainPage : ContentPage
             case Android.Views.MotionEventActions.Down:
                 _androidLastPanX = e.Event.GetX();
                 _androidLastPanY = e.Event.GetY();
-                imageView.Parent?.RequestDisallowInterceptTouchEvent(true);
+                _androidIsPinching = false;
+                viewport.Parent?.RequestDisallowInterceptTouchEvent(true);
+                break;
+
+            case Android.Views.MotionEventActions.PointerDown
+                when e.Event.PointerCount >= 2:
+                BeginAndroidFullScreenPinch(e.Event, density);
                 break;
 
             case Android.Views.MotionEventActions.Move
-                when e.Event.PointerCount == 1 &&
-                     _androidFullScreenScaleDetector?.IsInProgress != true &&
+                when e.Event.PointerCount >= 2:
+                if (!_androidIsPinching)
+                    BeginAndroidFullScreenPinch(e.Event, density);
+                ApplyAndroidFullScreenPinch(e.Event, density);
+                break;
+
+            case Android.Views.MotionEventActions.Move
+                when e.Event.PointerCount == 1 && !_androidIsPinching &&
                      FullScreenSensorImage.Scale > MinimumImageScale:
                 var currentX = e.Event.GetX();
                 var currentY = e.Event.GetY();
@@ -469,10 +796,13 @@ public partial class MainPage : ContentPage
 
             case Android.Views.MotionEventActions.Up:
             case Android.Views.MotionEventActions.Cancel:
-                imageView.Parent?.RequestDisallowInterceptTouchEvent(false);
+                _androidIsPinching = false;
+                ClampFullScreenImageTranslation();
+                viewport.Parent?.RequestDisallowInterceptTouchEvent(false);
                 break;
 
             case Android.Views.MotionEventActions.PointerUp:
+                _androidIsPinching = false;
                 if (e.Event.PointerCount > 1)
                 {
                     var remainingIndex = e.Event.ActionIndex == 0 ? 1 : 0;
@@ -485,24 +815,56 @@ public partial class MainPage : ContentPage
         e.Handled = true;
     }
 
-    private void ApplyAndroidFullScreenScale(Android.Views.ScaleGestureDetector detector)
+    private void BeginAndroidFullScreenPinch(Android.Views.MotionEvent motionEvent, double density)
     {
-        var density = Microsoft.Maui.Devices.DeviceDisplay.MainDisplayInfo.Density;
-        SetFullScreenImageScale(
-            FullScreenSensorImage.Scale * detector.ScaleFactor,
-            new Point(detector.FocusX / density, detector.FocusY / density));
+        if (motionEvent.PointerCount < 2 || density <= 0)
+            return;
+
+        var firstX = motionEvent.GetX(0) / density;
+        var firstY = motionEvent.GetY(0) / density;
+        var secondX = motionEvent.GetX(1) / density;
+        var secondY = motionEvent.GetY(1) / density;
+        var midpointX = (firstX + secondX) / 2.0;
+        var midpointY = (firstY + secondY) / 2.0;
+        var deltaX = secondX - firstX;
+        var deltaY = secondY - firstY;
+        _androidPinchStartDistance = (float)Math.Sqrt(deltaX * deltaX + deltaY * deltaY);
+        if (_androidPinchStartDistance < 1)
+            return;
+
+        _androidPinchStartScale = Math.Max(MinimumImageScale, FullScreenSensorImage.Scale);
+        var originX = FullScreenSensorImage.Width / 2.0;
+        var originY = FullScreenSensorImage.Height / 2.0;
+        _androidPinchAnchorX =
+            (midpointX - originX - FullScreenSensorImage.TranslationX) /
+            _androidPinchStartScale + originX;
+        _androidPinchAnchorY =
+            (midpointY - originY - FullScreenSensorImage.TranslationY) /
+            _androidPinchStartScale + originY;
+        _androidIsPinching = true;
     }
 
-    private sealed class FullScreenScaleListener(MainPage owner)
-        : Android.Views.ScaleGestureDetector.SimpleOnScaleGestureListener
+    private void ApplyAndroidFullScreenPinch(Android.Views.MotionEvent motionEvent, double density)
     {
-        public override bool OnScaleBegin(Android.Views.ScaleGestureDetector detector) => true;
+        if (!_androidIsPinching || motionEvent.PointerCount < 2 ||
+            _androidPinchStartDistance < 1 || density <= 0)
+            return;
 
-        public override bool OnScale(Android.Views.ScaleGestureDetector detector)
-        {
-            owner.ApplyAndroidFullScreenScale(detector);
-            return true;
-        }
+        var firstX = motionEvent.GetX(0) / density;
+        var firstY = motionEvent.GetY(0) / density;
+        var secondX = motionEvent.GetX(1) / density;
+        var secondY = motionEvent.GetY(1) / density;
+        var midpointX = (firstX + secondX) / 2.0;
+        var midpointY = (firstY + secondY) / 2.0;
+        var deltaX = secondX - firstX;
+        var deltaY = secondY - firstY;
+        var distance = Math.Sqrt(deltaX * deltaX + deltaY * deltaY);
+        var scale = _androidPinchStartScale * distance / _androidPinchStartDistance;
+        var originX = FullScreenSensorImage.Width / 2.0;
+        var originY = FullScreenSensorImage.Height / 2.0;
+        var translationX = midpointX - originX - (_androidPinchAnchorX - originX) * scale;
+        var translationY = midpointY - originY - (_androidPinchAnchorY - originY) * scale;
+        ApplyFullScreenImageTransform(scale, translationX, translationY);
     }
 
     private void OnAndroidImageTouch(object? sender, Android.Views.View.TouchEventArgs e)
@@ -562,35 +924,6 @@ public partial class MainPage : ContentPage
     }
 #endif
 
-    protected override void OnSizeAllocated(double width, double height)
-    {
-        base.OnSizeAllocated(width, height);
-        if (width <= 0) return;
-
-        var useWideLayout = width >= 900;
-        if (_isWideLayout == useWideLayout) return;
-        _isWideLayout = useWideLayout;
-
-        Workspace.ColumnDefinitions.Clear();
-        if (useWideLayout)
-        {
-            Workspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(360) });
-            Workspace.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Star });
-            Grid.SetRow(ControlPanel, 0);
-            Grid.SetColumn(ControlPanel, 0);
-            Grid.SetRow(ViewerPanel, 0);
-            Grid.SetColumn(ViewerPanel, 1);
-        }
-        else
-        {
-            Workspace.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Star });
-            Grid.SetRow(ViewerPanel, 0);
-            Grid.SetColumn(ViewerPanel, 0);
-            Grid.SetRow(ControlPanel, 1);
-            Grid.SetColumn(ControlPanel, 0);
-        }
-    }
-
     protected override async void OnAppearing()
     {
         base.OnAppearing();
@@ -599,5 +932,16 @@ public partial class MainPage : ContentPage
 
     public Task HandleWindowStoppedAsync() => _viewModel.HandleWindowStoppedAsync();
 
-    public Task HandleWindowDestroyingAsync() => _viewModel.HandleWindowDestroyingAsync();
+    public Task HandleWindowDestroyingAsync()
+    {
+#if ANDROID
+        _viewModel.PresentationFrameReady -= OnAndroidPresentationFrameReady;
+        lock (_androidPresentationGate)
+        {
+            _androidPresentationStopping = true;
+            _androidPendingPresentationFrame = null;
+        }
+#endif
+        return _viewModel.HandleWindowDestroyingAsync();
+    }
 }

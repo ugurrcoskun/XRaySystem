@@ -3,6 +3,8 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using XRaySystem.Domain.ValueObjects;
+using XRaySystem.Infrastructure.Storage;
 
 namespace XRaySystem.WPF.Services;
 
@@ -13,12 +15,17 @@ namespace XRaySystem.WPF.Services;
 public interface IImageStorageService
 {
     string SaveTiff(BitmapSource frozenBitmap, string fileName);
+    AcquisitionArtifactFiles SaveSnapshot(
+        BitmapSource frozenBitmap,
+        RawGray16Frame rawFrame,
+        string fileStem);
     BitmapSource LoadTiff(string filePath);
 }
 
 public class ImageStorageService : IImageStorageService
 {
     private readonly string _baseFolder;
+    private readonly AcquisitionArtifactStorage _artifactStorage;
 
     public ImageStorageService() : this(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -32,6 +39,7 @@ public class ImageStorageService : IImageStorageService
         ArgumentException.ThrowIfNullOrWhiteSpace(baseFolder);
         _baseFolder = Path.GetFullPath(baseFolder);
         Directory.CreateDirectory(_baseFolder);
+        _artifactStorage = new AcquisitionArtifactStorage(_baseFolder);
     }
 
     /// <summary>
@@ -43,7 +51,7 @@ public class ImageStorageService : IImageStorageService
         if (frozenBitmap == null)
             throw new ArgumentNullException(nameof(frozenBitmap));
         if (!frozenBitmap.IsFrozen)
-            throw new InvalidOperationException("BitmapSource Freeze() edilmeden kaydedilemez.");
+            throw new InvalidOperationException("BitmapSource must be frozen before it can be saved.");
 
         var fullPath = Path.Combine(_baseFolder, fileName);
         if (File.Exists(fullPath))
@@ -80,10 +88,27 @@ public class ImageStorageService : IImageStorageService
         return fullPath;
     }
 
+    public AcquisitionArtifactFiles SaveSnapshot(
+        BitmapSource frozenBitmap,
+        RawGray16Frame rawFrame,
+        string fileStem)
+    {
+        ArgumentNullException.ThrowIfNull(frozenBitmap);
+        ArgumentNullException.ThrowIfNull(rawFrame);
+        if (!frozenBitmap.IsFrozen)
+            throw new InvalidOperationException("BitmapSource must be frozen before it can be saved.");
+
+        var encoder = new TiffBitmapEncoder { Compression = TiffCompressOption.None };
+        encoder.Frames.Add(BitmapFrame.Create(frozenBitmap));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        return _artifactStorage.Save(rawFrame, stream.ToArray(), ".tiff", fileStem);
+    }
+
     public BitmapSource LoadTiff(string filePath)
     {
         if (!File.Exists(filePath))
-            throw new FileNotFoundException($"Görüntü dosyası bulunamadı: {filePath}");
+            throw new FileNotFoundException($"Image file not found: {filePath}");
 
         var decoder = new TiffBitmapDecoder(
             new Uri(filePath, UriKind.Absolute),

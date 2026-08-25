@@ -42,7 +42,7 @@ public partial class ComparisonWindow : Window
         InitializeComponent();
         _items = items.ToList();
         BuildGrid();
-        ImageCountLabel.Text = $"{_items.Count} GÖRSEL KARŞILAŞTIRILIYOR";
+        ImageCountLabel.Text = $"COMPARING {_items.Count} IMAGE{(_items.Count == 1 ? string.Empty : "S")}";
         UpdateZoomLabel();
         Loaded += (_, _) => BuildRulers();
     }

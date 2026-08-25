@@ -36,6 +36,8 @@ public sealed class SensorEventRelay : IHostedService, IDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private Task _pumpTask = Task.CompletedTask;
     private bool _started;
+    private DeviceStateContract? _lastPublishedState;
+    private Guid? _lastGrabAcquisitionId;
 
     public SensorEventRelay(
         ISensorService sensor,
@@ -54,6 +56,8 @@ public sealed class SensorEventRelay : IHostedService, IDisposable
         if (_started) return Task.CompletedTask;
         _started = true;
         _sensor.StatusChanged += OnStatusChanged;
+        if (_sensor is IAcquisitionCoordinator coordinator)
+            coordinator.HardwareStateChanged += OnHardwareStateChanged;
         _sensor.MeasurementReceived += OnMeasurementReceived;
         _pumpTask = Task.WhenAll(
             PumpStatusesAsync(_shutdown.Token),
@@ -64,7 +68,21 @@ public sealed class SensorEventRelay : IHostedService, IDisposable
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         if (!_started) return;
+        try
+        {
+            await _sensor.AbortAsync()
+                .WaitAsync(TimeSpan.FromSeconds(5), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (TimeoutException) { }
+        catch
+        {
+            // Shutdown continues; the acquisition coordinator also has bounded stop timeouts.
+        }
         _sensor.StatusChanged -= OnStatusChanged;
+        if (_sensor is IAcquisitionCoordinator coordinator)
+            coordinator.HardwareStateChanged -= OnHardwareStateChanged;
         _sensor.MeasurementReceived -= OnMeasurementReceived;
         _measurements.Writer.TryComplete();
         _statuses.Writer.TryComplete();
@@ -76,9 +94,12 @@ public sealed class SensorEventRelay : IHostedService, IDisposable
 
     private void OnStatusChanged(DeviceStatus status)
     {
-        if (status != DeviceStatus.Capturing) _latestLiveFrame.Clear();
+        if (status != DeviceStatus.Grabbing) _latestLiveFrame.Clear();
         _statuses.Writer.TryWrite(_coordinator.GetState());
     }
+
+    private void OnHardwareStateChanged(AcquisitionHardwareState _) =>
+        _statuses.Writer.TryWrite(_coordinator.GetState());
 
     private void OnMeasurementReceived(XRayMeasurement measurement) =>
         _measurements.Writer.TryWrite(measurement);
@@ -91,6 +112,50 @@ public sealed class SensorEventRelay : IHostedService, IDisposable
                 DeviceEventNames.StatusChanged,
                 new DeviceStatusEventContract(state),
                 cancellationToken).ConfigureAwait(false);
+            await _hub.Clients.All.SendAsync(
+                DeviceEventNames.HardwareStateChanged,
+                new HardwareStateEventContract(
+                    state.DeviceId,
+                    state.SequenceNumber,
+                    state.CoordinatorState,
+                    state.GeneratorConnected,
+                    state.DetectorConnected,
+                    state.XRayActive,
+                    state.DetectorAcquiring,
+                    state.ActiveAcquisitionId,
+                    state.TimestampUtc),
+                cancellationToken).ConfigureAwait(false);
+
+            if (_lastPublishedState?.XRayActive == true && state.XRayActive == false)
+            {
+                await _hub.Clients.All.SendAsync(
+                    DeviceEventNames.ExposureEnded,
+                    new ExposureEndedEventContract(
+                        state.DeviceId,
+                        state.SequenceNumber,
+                        _lastPublishedState.ActiveAcquisitionId,
+                        state.TimestampUtc),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            if (!string.Equals(
+                    _lastPublishedState?.CoordinatorState,
+                    nameof(AcquisitionCoordinatorState.Frozen),
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    state.CoordinatorState,
+                    nameof(AcquisitionCoordinatorState.Frozen),
+                    StringComparison.Ordinal))
+            {
+                await _hub.Clients.All.SendAsync(
+                    DeviceEventNames.GrabFrozen,
+                    new GrabFrozenEventContract(
+                        state.DeviceId,
+                        state.SequenceNumber,
+                        _lastGrabAcquisitionId,
+                        state.TimestampUtc),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            _lastPublishedState = state;
         }
     }
 
@@ -99,7 +164,7 @@ public sealed class SensorEventRelay : IHostedService, IDisposable
         await foreach (var measurement in _measurements.Reader.ReadAllAsync(cancellationToken))
         {
             var telemetry = _coordinator.CreateTelemetryEvent(measurement);
-            if (measurement.Frame is { Kind: FrameKind.LivePreview } frame)
+            if (measurement.Frame is { Kind: FrameKind.GrabPreview } frame)
             {
                 var autoWindow = WindowLevelMapper.Auto(frame.Pixels);
                 var preview = Gray8BmpEncoder.EncodePreview(
@@ -116,7 +181,30 @@ public sealed class SensorEventRelay : IHostedService, IDisposable
                     LowHeight = preview.Height
                 };
                 _latestLiveFrame.Set(telemetry, preview.Bytes);
+                _lastGrabAcquisitionId = frame.AcquisitionId;
+                await _hub.Clients.All.SendAsync(
+                    DeviceEventNames.GrabFrameReady,
+                    new GrabFrameReadyEventContract(
+                        telemetry.DeviceId,
+                        telemetry.SequenceNumber,
+                        frame.AcquisitionId,
+                        preview.Width,
+                        preview.Height,
+                        telemetry.CapturedAtUtc),
+                    cancellationToken).ConfigureAwait(false);
             }
+            await _hub.Clients.All.SendAsync(
+                DeviceEventNames.FrameReady,
+                new FrameReadyEventContract(
+                    telemetry.DeviceId,
+                    telemetry.SequenceNumber,
+                    telemetry.AcquisitionId,
+                    telemetry.Operation,
+                    telemetry.FrameKind,
+                    telemetry.Width,
+                    telemetry.Height,
+                    telemetry.CapturedAtUtc),
+                cancellationToken).ConfigureAwait(false);
             await _hub.Clients.All.SendAsync(
                 DeviceEventNames.TelemetryReceived,
                 telemetry,
@@ -127,6 +215,8 @@ public sealed class SensorEventRelay : IHostedService, IDisposable
     public void Dispose()
     {
         _sensor.StatusChanged -= OnStatusChanged;
+        if (_sensor is IAcquisitionCoordinator coordinator)
+            coordinator.HardwareStateChanged -= OnHardwareStateChanged;
         _sensor.MeasurementReceived -= OnMeasurementReceived;
         _shutdown.Dispose();
     }

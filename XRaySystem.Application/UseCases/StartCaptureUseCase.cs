@@ -14,7 +14,6 @@ public class StartCaptureUseCase
 
     public async Task ExecuteAsync()
     {
-        await _sensorService.ConnectAsync();
         await _sensorService.StartCaptureAsync();
     }
 }

@@ -19,9 +19,11 @@ public class GetMeasurementHistoryUseCase
         _processTelemetryUseCase = processTelemetryUseCase;
     }
 
-    public async Task<IEnumerable<SensorDataDto>> ExecuteAsync()
+    public async Task<IReadOnlyList<SensorDataDto>> ExecuteAsync(int maximumCount = 200)
     {
-        var entities = await _repository.GetAllAsync();
+        if (maximumCount is < 1 or > 500)
+            throw new ArgumentOutOfRangeException(nameof(maximumCount));
+        var entities = await _repository.GetRecentAsync(maximumCount);
         return entities.Select(e => _processTelemetryUseCase.Execute(e)).ToList();
     }
 }

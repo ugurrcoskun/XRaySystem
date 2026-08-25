@@ -30,6 +30,10 @@ public sealed class RemoteSensorServiceTests
         Assert.Equal(fake.ImageId, measurement.Id);
         Assert.Equal(fake.AcquisitionId, measurement.Frame!.AcquisitionId);
         Assert.Equal(FrameKind.Snap, measurement.Frame.Kind);
+        Assert.Equal(80, measurement.RequestedParameters.VoltageKv);
+        Assert.Equal(2400, measurement.RequestedParameters.PowerW);
+        Assert.Equal(MeasurementProvenance.Measured, measurement.Readings.VoltageProvenance);
+        Assert.Equal(MeasurementProvenance.Derived, measurement.Readings.TubeCurrentProvenance);
         Assert.Equal(DeviceStatus.Frozen, service.CurrentStatus);
         Assert.Contains(DeviceStatus.Capturing, statuses);
 
@@ -65,9 +69,157 @@ public sealed class RemoteSensorServiceTests
         Assert.NotNull(received);
         Assert.Equal(FrameKind.LivePreview, received.Frame!.Kind);
         Assert.Equal(telemetry.AcquisitionId, received.Frame.AcquisitionId);
-        Assert.Equal("remote-low-bmp:7", received.Frame.SourceMarker);
+        Assert.Equal("remote-grab-low-bmp:7", received.Frame.SourceMarker);
         Assert.Equal(source.Width * source.Height, received.Frame.Pixels.Length);
         Assert.Equal(DeviceStatus.Connected, service.CurrentStatus);
+    }
+
+    [Fact]
+    public async Task Adapter_exposes_xray_active_only_from_verified_remote_hardware_events()
+    {
+        var fake = new FakeRemoteDeviceClient();
+        using var service = new RemoteSensorService(fake);
+        var observed = new List<AcquisitionHardwareState>();
+        service.HardwareStateChanged += observed.Add;
+        await service.ConnectAsync();
+
+        fake.RaiseHardwareState(new HardwareStateEventContract(
+            "mock-01",
+            2,
+            nameof(AcquisitionCoordinatorState.Exposing),
+            GeneratorConnected: true,
+            DetectorConnected: true,
+            XRayActive: true,
+            DetectorAcquiring: true,
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow));
+
+        Assert.True(service.HardwareState.XRayActive);
+        Assert.True(service.HardwareState.IsVerified);
+        Assert.NotNull(service.HardwareState.VerifiedAtUtc);
+        Assert.Equal(AcquisitionCoordinatorState.Exposing, service.CoordinatorState);
+        Assert.True(Assert.Single(observed).XRayActive);
+    }
+
+    [Fact]
+    public async Task Connection_loss_invalidates_last_verified_hardware_state()
+    {
+        var fake = new FakeRemoteDeviceClient();
+        using var service = new RemoteSensorService(fake);
+        var observed = new List<AcquisitionHardwareState>();
+        service.HardwareStateChanged += observed.Add;
+        await service.ConnectAsync();
+
+        fake.RaiseHardwareState(new HardwareStateEventContract(
+            "mock-01",
+            2,
+            nameof(AcquisitionCoordinatorState.Exposing),
+            GeneratorConnected: true,
+            DetectorConnected: true,
+            XRayActive: true,
+            DetectorAcquiring: true,
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow));
+        Assert.True(service.HardwareState.IsVerified);
+        Assert.True(service.HardwareState.XRayActive);
+
+        fake.RaiseConnectionState(connected: false);
+
+        Assert.Equal(DeviceStatus.Error, service.CurrentStatus);
+        Assert.False(service.HardwareState.IsVerified);
+        Assert.False(service.HardwareState.XRayActive);
+        Assert.False(service.HardwareState.DetectorAcquiring);
+        Assert.Null(service.HardwareState.ActiveAcquisitionId);
+        Assert.Null(service.HardwareState.VerifiedAtUtc);
+        Assert.Equal(AcquisitionCoordinatorState.Faulted, service.CoordinatorState);
+        Assert.False(observed[^1].IsVerified);
+    }
+
+    [Fact]
+    public async Task Reconnect_accepts_fresh_state_after_remote_sequence_restart()
+    {
+        var fake = new FakeRemoteDeviceClient();
+        using var service = new RemoteSensorService(fake);
+        await service.ConnectAsync();
+        fake.RaiseHardwareState(new HardwareStateEventContract(
+            "mock-01",
+            50,
+            nameof(AcquisitionCoordinatorState.Exposing),
+            true,
+            true,
+            true,
+            true,
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow));
+        Assert.True(service.HardwareState.XRayActive);
+
+        fake.RaiseConnectionState(connected: false);
+        fake.SetReconnectState(sequence: 0);
+        var refreshed = new TaskCompletionSource<AcquisitionHardwareState>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        service.HardwareStateChanged += state =>
+        {
+            if (state.IsVerified && state.CoordinatorState == AcquisitionCoordinatorState.Idle)
+                refreshed.TrySetResult(state);
+        };
+
+        fake.RaiseConnectionState(connected: true);
+        var state = await refreshed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(state.IsVerified);
+        Assert.False(state.XRayActive);
+        Assert.Equal(AcquisitionCoordinatorState.Idle, service.CoordinatorState);
+    }
+
+    [Fact]
+    public async Task Delayed_status_event_cannot_overwrite_new_local_targets_or_reactivate_stale_hardware()
+    {
+        var fake = new FakeRemoteDeviceClient();
+        using var service = new RemoteSensorService(fake);
+        await service.ConnectAsync();
+        service.Parameters = new AcquisitionParameters(82, 2460, 15);
+        service.Profile = AcquisitionProfile.MedicalSpecimenLikePhantom;
+
+        fake.RaiseStatus(DeviceStatus.Connected, sequence: 1);
+        fake.RaiseHardwareState(new HardwareStateEventContract(
+            "mock-01",
+            0,
+            nameof(AcquisitionCoordinatorState.Exposing),
+            true,
+            true,
+            true,
+            true,
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow));
+
+        Assert.Equal(82, service.Parameters.VoltageKv);
+        Assert.Equal(2460, service.Parameters.PowerW);
+        Assert.Equal(AcquisitionProfile.MedicalSpecimenLikePhantom, service.Profile);
+        Assert.False(service.HardwareState.XRayActive);
+    }
+
+    [Fact]
+    public async Task Delayed_status_event_cannot_overwrite_newer_verified_hardware_event()
+    {
+        var fake = new FakeRemoteDeviceClient();
+        using var service = new RemoteSensorService(fake);
+        await service.ConnectAsync();
+
+        fake.RaiseHardwareState(new HardwareStateEventContract(
+            "mock-01",
+            10,
+            nameof(AcquisitionCoordinatorState.Exposing),
+            true,
+            true,
+            true,
+            true,
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow));
+        fake.RaiseStatus(DeviceStatus.Connected, sequence: 2);
+
+        Assert.True(service.HardwareState.IsVerified);
+        Assert.True(service.HardwareState.XRayActive);
+        Assert.Equal(AcquisitionCoordinatorState.Exposing, service.CoordinatorState);
     }
 
     private sealed class FakeRemoteDeviceClient : IRemoteDeviceClient
@@ -90,6 +242,27 @@ public sealed class RemoteSensorServiceTests
         public event Action<TelemetryEventContract>? TelemetryReceived;
         public event Action<RemoteLowFrame>? LowFrameReceived;
         public event Action<SnapProgressEventContract>? SnapProgressReceived
+        {
+            add { }
+            remove { }
+        }
+        public event Action<HardwareStateEventContract>? HardwareStateReceived;
+        public event Action<FrameReadyEventContract>? FrameReadyReceived
+        {
+            add { }
+            remove { }
+        }
+        public event Action<GrabFrameReadyEventContract>? GrabFrameReadyReceived
+        {
+            add { }
+            remove { }
+        }
+        public event Action<GrabFrozenEventContract>? GrabFrozenReceived
+        {
+            add { }
+            remove { }
+        }
+        public event Action<ExposureEndedEventContract>? ExposureEndedReceived
         {
             add { }
             remove { }
@@ -146,7 +319,15 @@ public sealed class RemoteSensorServiceTests
         public Task<SnapCommandResult> SnapAsync(CancellationToken cancellationToken = default)
         {
             _state = State(DeviceStatus.Frozen, LastParameters, LastProfile);
-            var measured = new MeasuredTelemetryContract(80, 30, 2400, 1800, 25);
+            var measured = new MeasuredTelemetryContract(
+                80,
+                30,
+                2400,
+                1800,
+                25,
+                MeasurementProvenanceContract.Measured,
+                MeasurementProvenanceContract.Derived,
+                MeasurementProvenanceContract.Measured);
             var image = new RemoteImageMetadataContract(
                 ImageId,
                 AcquisitionId,
@@ -184,6 +365,25 @@ public sealed class RemoteSensorServiceTests
 
         public void RaiseTelemetry(TelemetryEventContract telemetry) => TelemetryReceived?.Invoke(telemetry);
         public void RaiseLowFrame(RemoteLowFrame frame) => LowFrameReceived?.Invoke(frame);
+        public void RaiseHardwareState(HardwareStateEventContract state) => HardwareStateReceived?.Invoke(state);
+        public void RaiseConnectionState(bool connected) => ConnectionStateChanged?.Invoke(connected);
+        public void SetReconnectState(long sequence)
+        {
+            _state = State(DeviceStatus.Connected) with
+            {
+                SequenceNumber = sequence,
+                CoordinatorState = nameof(AcquisitionCoordinatorState.Idle),
+                GeneratorConnected = true,
+                DetectorConnected = true,
+                XRayActive = false,
+                DetectorAcquiring = false
+            };
+        }
+        public void RaiseStatus(DeviceStatus status, long sequence)
+        {
+            var state = State(status) with { SequenceNumber = sequence };
+            StatusChanged?.Invoke(state);
+        }
 
         public TelemetryEventContract CreateTelemetry(long sequence) => new(
             "mock-01",

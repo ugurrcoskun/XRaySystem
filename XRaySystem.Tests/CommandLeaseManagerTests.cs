@@ -29,4 +29,23 @@ public sealed class CommandLeaseManagerTests
         lease.Release("operator-a");
         Assert.True(lease.TryAcquire("operator-b", now.AddSeconds(2)));
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("client\nspoof")]
+    public void Lease_rejects_empty_or_log_injection_client_ids(string clientId)
+    {
+        var lease = new CommandLeaseManager(TimeSpan.FromSeconds(30));
+
+        Assert.Throws<ArgumentException>(() => lease.TryAcquire(clientId, DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
+    public void Lease_rejects_overlong_client_ids()
+    {
+        var lease = new CommandLeaseManager(TimeSpan.FromSeconds(30));
+
+        Assert.Throws<ArgumentException>(() =>
+            lease.TryAcquire(new string('x', 129), DateTimeOffset.UtcNow));
+    }
 }

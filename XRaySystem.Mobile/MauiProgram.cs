@@ -34,6 +34,7 @@ namespace XRaySystem.Mobile
             builder.Services.AddDbContext<XRayDbContext>(options =>
                 options.UseSqlite($"Data Source={mobileDatabasePath}"));
             builder.Services.AddScoped<IXRayMeasurementRepository, XRayMeasurementRepository>();
+            builder.Services.AddSingleton<DatabaseInitializationState>();
 
             // Local varsayılandır. Android Emulator remote modda Windows hostuna 10.0.2.2 ile ulaşır.
             var defaultDeviceHost = OperatingSystem.IsAndroid()
@@ -48,7 +49,8 @@ namespace XRaySystem.Mobile
                 builder.Services.AddSingleton(new RemoteDeviceClientOptions(
                     runtime.DeviceHostBaseAddress,
                     runtime.DeviceId,
-                    ApiKey: Environment.GetEnvironmentVariable("XRAYSYSTEM_DEVICEHOST_API_KEY")));
+                    ApiKey: Environment.GetEnvironmentVariable("XRAYSYSTEM_DEVICEHOST_API_KEY"),
+                    ApiKeyProvider: modeSettings.GetApiKeyAsync));
                 builder.Services.AddSingleton(new HttpClient());
                 builder.Services.AddSingleton<RemoteDeviceClient>();
                 builder.Services.AddSingleton<IRemoteDeviceClient>(provider =>
@@ -76,24 +78,9 @@ namespace XRaySystem.Mobile
             // Views
             builder.Services.AddTransient<MainPage>();
 
-            var app = builder.Build();
-
-            // Migration'ları uygulama oluşturulmadan uygula; eski veritabanları veri kaybetmeden baseline edilir.
-            using (var scope = app.Services.CreateScope())
-            {
-                try
-                {
-                    var db = scope.ServiceProvider.GetRequiredService<XRayDbContext>();
-                    LegacyDatabaseBaseliner.Prepare(db);
-                    db.Database.Migrate();
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"DB Init Error: {ex.Message}");
-                }
-            }
-
-            return app;
+            // Database migration starts after the first page is visible. This keeps
+            // startup responsive while DatabaseInitializationState serializes access.
+            return builder.Build();
         }
     }
 }

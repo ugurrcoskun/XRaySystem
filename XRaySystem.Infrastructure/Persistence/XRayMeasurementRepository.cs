@@ -28,8 +28,10 @@ public class XRayMeasurementRepository : IXRayMeasurementRepository
         await dbContext.SaveChangesAsync();
     }
 
-    public async Task<IEnumerable<XRayMeasurement>> GetAllAsync()
+    public async Task<IReadOnlyList<XRayMeasurement>> GetRecentAsync(int maximumCount)
     {
+        if (maximumCount is < 1 or > 500)
+            throw new ArgumentOutOfRangeException(nameof(maximumCount));
         using var scope = _scopeFactory.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<XRayDbContext>();
 
@@ -37,6 +39,7 @@ public class XRayMeasurementRepository : IXRayMeasurementRepository
         return await dbContext.Measurements
             .AsNoTracking()
             .OrderByDescending(m => m.Timestamp)
+            .Take(maximumCount)
             .ToListAsync();
     }
 }

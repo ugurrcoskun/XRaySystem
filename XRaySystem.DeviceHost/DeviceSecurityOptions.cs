@@ -43,9 +43,11 @@ public sealed class DeviceSecurityOptions
                 return false;
             }
 
-            if (string.IsNullOrWhiteSpace(credential.Subject))
+            if (string.IsNullOrWhiteSpace(credential.Subject) ||
+                credential.Subject.Length > 128 ||
+                credential.Subject.Any(char.IsControl))
             {
-                error = "Her API anahtarının Subject değeri olmalıdır.";
+                error = "Her API anahtarının Subject değeri 1-128 görünür karakter olmalıdır.";
                 return false;
             }
 

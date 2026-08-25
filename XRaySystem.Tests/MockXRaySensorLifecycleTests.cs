@@ -6,6 +6,23 @@ namespace XRaySystem.Tests;
 
 public sealed class MockXRaySensorLifecycleTests
 {
+    [Fact]
+    public async Task Snap_low_and_raw_are_distinct_detector_modes_in_the_mock_adapter()
+    {
+        using var sensor = new MockXRaySensorService();
+        await sensor.ConnectAsync();
+
+        var low = await sensor.SnapAsync(new SnapRequest(1, SnapFrameMode.Low));
+        var raw = await sensor.SnapAsync(new SnapRequest(1, SnapFrameMode.Raw));
+
+        Assert.Equal((512, 512), (low.Frame!.Width, low.Frame.Height));
+        Assert.Equal((2304, 2930), (raw.Frame!.Width, raw.Frame.Height));
+        Assert.Equal(SnapFrameMode.Low, low.Frame.SnapFrameMode);
+        Assert.Equal(SnapFrameMode.Raw, raw.Frame.SnapFrameMode);
+        Assert.Equal(AcquisitionOperation.Snap, low.Frame.Operation);
+        Assert.Equal(AcquisitionOperation.Snap, raw.Frame.Operation);
+    }
+
     [Fact(Timeout = 10_000)]
     public async Task Connect_capture_stop_disconnect_follows_expected_states()
     {

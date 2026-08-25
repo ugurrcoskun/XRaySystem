@@ -27,10 +27,17 @@ public sealed class DeviceApiKeyAuthenticationHandler : AuthenticationHandler<Au
         if (!_security.AuthenticationEnabled)
             return Task.FromResult(Success("development-local", DeviceRoles.Admin));
 
-        if (!Request.Headers.TryGetValue(DeviceProtocolHeaders.ApiKey, out var values) || values.Count != 1)
-            return Task.FromResult(AuthenticateResult.NoResult());
+        var headerValues = Request.Headers[DeviceProtocolHeaders.ApiKey];
+        var authorization = Request.Headers.Authorization.ToString();
+        var bearer = authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authorization["Bearer ".Length..].Trim()
+            : null;
+        if (headerValues.Count > 1 || (headerValues.Count == 1 && bearer is not null))
+            return Task.FromResult(AuthenticateResult.Fail("Birden fazla API kimlik bilgisi gönderilemez."));
 
-        var presented = values[0];
+        var presented = headerValues.Count == 1 ? headerValues[0] : bearer;
+        if (presented is null)
+            return Task.FromResult(AuthenticateResult.NoResult());
         if (string.IsNullOrWhiteSpace(presented))
             return Task.FromResult(AuthenticateResult.Fail("Geçersiz API anahtarı."));
 

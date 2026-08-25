@@ -14,6 +14,14 @@
         "XRAYSYSTEM_DEVICEHOST_URL": "http://127.0.0.1:5088",
         "XRAYSYSTEM_DEVICE_ID": "mock-01"
       }
+    },
+    "XRaySystem.WPF - Device PC HTTPS": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "XRAYSYSTEM_SENSOR_MODE": "Remote",
+        "XRAYSYSTEM_DEVICEHOST_URL": "https://localhost:7088",
+        "XRAYSYSTEM_DEVICE_ID": "mock-01"
+      }
     }
   }
 }

@@ -28,6 +28,27 @@ public sealed class Gray16RawFileCodecTests
         Assert.Equal(frame.SourceStrideBytes, restored.SourceStrideBytes);
         Assert.Equal(frame.SourceEndian, restored.SourceEndian);
         Assert.Equal(frame.SourceOrientation, restored.SourceOrientation);
+        Assert.Equal(frame.Operation, restored.Operation);
+        Assert.Equal(frame.SnapFrameMode, restored.SnapFrameMode);
+    }
+
+    [Fact]
+    public void Version_one_snap_is_read_as_raw_for_backward_compatibility()
+    {
+        using var stream = new MemoryStream();
+        Gray16RawFileCodec.Write(stream, CreateFrame());
+        var versionTwo = stream.ToArray();
+        BitConverter.GetBytes(1).CopyTo(versionTwo, 8);
+        var versionOne = new byte[versionTwo.Length - 8];
+        Buffer.BlockCopy(versionTwo, 0, versionOne, 0, 32);
+        Buffer.BlockCopy(versionTwo, 40, versionOne, 32, versionTwo.Length - 40);
+
+        using var legacy = new MemoryStream(versionOne, writable: false);
+        var restored = Gray16RawFileCodec.Read(legacy);
+
+        Assert.Equal(AcquisitionOperation.Snap, restored.Operation);
+        Assert.Equal(SnapFrameMode.Raw, restored.SnapFrameMode);
+        Assert.Equal(CreateFrame().Pixels, restored.Pixels);
     }
 
     [Fact]

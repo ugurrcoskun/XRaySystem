@@ -29,5 +29,10 @@ public sealed class ProcessTelemetryUseCaseTests
         Assert.True(dto.IsSimulator);
         Assert.Equal("preview.bmp", dto.ImagePath);
         Assert.Equal("source.xrayraw", dto.RawImagePath);
+        Assert.Equal(frame.AcquisitionId, dto.AcquisitionId);
+        Assert.Equal(AcquisitionOperation.Grab, dto.Operation);
+        Assert.Equal(frame.Width, dto.SourceWidth);
+        Assert.Equal(frame.SourceMarker, dto.SourceMarker);
+        Assert.Equal(80, dto.RequestedParameters!.VoltageKv);
     }
 }

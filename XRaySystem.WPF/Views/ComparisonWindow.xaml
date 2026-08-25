@@ -132,7 +132,7 @@
                 </StackPanel>
 
                 <!-- Right: close -->
-                <Button Grid.Column="2" Content="✕  KAPAT" Height="34" Padding="16,0"
+                <Button Grid.Column="2" Content="CLOSE" Height="34" Padding="16,0"
                         Background="#0F1E35" Foreground="#EF4444" BorderBrush="#2D1515" BorderThickness="1"
                         FontSize="12" FontWeight="Bold" Cursor="Hand" Click="CloseBtn_Click">
                     <Button.Template>

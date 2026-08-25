@@ -2,7 +2,12 @@ using System;
 
 namespace XRaySystem.Domain.ValueObjects;
 
-public enum FrameKind { LivePreview, Snap }
+public enum FrameKind
+{
+    GrabPreview = 0,
+    LivePreview = GrabPreview,
+    Snap = 1
+}
 public enum Gray16PixelFormat { Gray16LittleEndian }
 public enum AcquisitionProfile { IndustrialQaPhantom, MedicalSpecimenLikePhantom }
 
@@ -25,6 +30,8 @@ public sealed record RawGray16Frame
     public int? SourceStrideBytes { get; init; }
     public string? SourceEndian { get; init; }
     public string? SourceOrientation { get; init; }
+    public AcquisitionOperation Operation { get; init; }
+    public SnapFrameMode? SnapFrameMode { get; init; }
 
     public RawGray16Frame(
         ushort[] pixels,
@@ -39,7 +46,9 @@ public sealed record RawGray16Frame
         string sourceMarker,
         int? sourceStrideBytes = null,
         string? sourceEndian = null,
-        string? sourceOrientation = null)
+        string? sourceOrientation = null,
+        AcquisitionOperation? operation = null,
+        SnapFrameMode? snapFrameMode = null)
     {
         ArgumentNullException.ThrowIfNull(pixels);
         ArgumentNullException.ThrowIfNull(settings);
@@ -75,6 +84,21 @@ public sealed record RawGray16Frame
         if (string.IsNullOrWhiteSpace(sourceMarker))
             throw new ArgumentException("Frame source marker boş olamaz.", nameof(sourceMarker));
 
+        var resolvedOperation = operation ??
+            (kind == FrameKind.Snap ? AcquisitionOperation.Snap : AcquisitionOperation.Grab);
+        if (!Enum.IsDefined(resolvedOperation))
+            throw new ArgumentOutOfRangeException(nameof(operation));
+        if (resolvedOperation == AcquisitionOperation.Snap)
+        {
+            snapFrameMode ??= global::XRaySystem.Domain.ValueObjects.SnapFrameMode.Raw;
+            if (!Enum.IsDefined(snapFrameMode.Value))
+                throw new ArgumentOutOfRangeException(nameof(snapFrameMode));
+        }
+        else if (snapFrameMode is not null)
+        {
+            throw new ArgumentException("GRAB frame SNAP modu taşıyamaz.", nameof(snapFrameMode));
+        }
+
         Pixels = pixels;
         Width = width;
         Height = height;
@@ -88,6 +112,8 @@ public sealed record RawGray16Frame
         SourceStrideBytes = sourceStrideBytes;
         SourceEndian = sourceEndian;
         SourceOrientation = sourceOrientation;
+        Operation = resolvedOperation;
+        SnapFrameMode = snapFrameMode;
     }
 
     public int PixelCount => checked(Width * Height);

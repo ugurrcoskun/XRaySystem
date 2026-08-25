@@ -3,6 +3,8 @@ using XRaySystem.DeviceHost;
 using XRaySystem.Domain.Entities;
 using XRaySystem.Domain.Interfaces;
 using XRaySystem.Domain.ValueObjects;
+using Microsoft.Extensions.Logging.Abstractions;
+using XRaySystem.Infrastructure.Storage;
 
 namespace XRaySystem.Tests;
 
@@ -35,7 +37,7 @@ public sealed class DeviceCoordinatorTests
         Assert.Equal(nameof(AcquisitionProfile.MedicalSpecimenLikePhantom), parameters.Device.Profile);
 
         var live = await coordinator.StartLiveAsync(Command(), CancellationToken.None);
-        Assert.Equal(nameof(DeviceStatus.Capturing), live.Device.Status);
+        Assert.Equal(nameof(DeviceStatus.Grabbing), live.Device.Status);
 
         var stopped = await coordinator.StopLiveAsync(Command(), CancellationToken.None);
         Assert.Equal(nameof(DeviceStatus.Connected), stopped.Device.Status);
@@ -51,6 +53,8 @@ public sealed class DeviceCoordinatorTests
         Assert.Equal(nameof(AcquisitionProfile.MedicalSpecimenLikePhantom), snap.Image.Profile);
         Assert.True(snap.Image.LowAvailable);
         Assert.True(snap.Image.RawAvailable);
+        Assert.Equal(AcquisitionOperationContract.Snap, snap.Image.Operation);
+        Assert.Equal(SnapFrameModeContract.Raw, snap.Image.SnapFrameMode);
         Assert.DoesNotContain(
             typeof(RemoteImageMetadataContract).GetProperties(),
             property => property.Name.Contains("Path", StringComparison.OrdinalIgnoreCase) ||
@@ -80,7 +84,135 @@ public sealed class DeviceCoordinatorTests
         Assert.Equal(nameof(FrameKind.Snap), snap.Image.Kind);
 
         var resumed = await coordinator.StartLiveAsync(Command(), CancellationToken.None);
-        Assert.Equal(nameof(DeviceStatus.Capturing), resumed.Device.Status);
+        Assert.Equal(nameof(DeviceStatus.Grabbing), resumed.Device.Status);
+    }
+
+    [Fact]
+    public async Task Coordinator_routes_snap_low_and_raw_as_distinct_idempotent_operations()
+    {
+        var sensor = new TestSensor();
+        using var coordinator = new DeviceCoordinator(
+            sensor,
+            new DeviceHostOptions("test-device", IsSimulator: true),
+            CreateBuffer());
+        await coordinator.ConnectAsync(Command(), CancellationToken.None);
+        var commandId = Guid.NewGuid();
+
+        var low = await coordinator.SnapAsync(
+            new SnapCommandRequest(commandId, SnapFrameModeContract.Low),
+            CancellationToken.None);
+
+        Assert.Equal(SnapFrameMode.Low, sensor.LastSnapMode);
+        Assert.Equal(SnapFrameModeContract.Low, low.Image.SnapFrameMode);
+        Assert.Equal(AcquisitionOperationContract.Snap, low.Image.Operation);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.SnapAsync(
+                new SnapCommandRequest(commandId, SnapFrameModeContract.Raw),
+                CancellationToken.None));
+        Assert.Equal(1, sensor.SnapCalls);
+    }
+
+    [Fact]
+    public async Task Grab_and_freeze_use_the_new_server_operations()
+    {
+        var sensor = new TestSensor();
+        using var coordinator = new DeviceCoordinator(
+            sensor,
+            new DeviceHostOptions("test-device", IsSimulator: true),
+            CreateBuffer());
+        await coordinator.ConnectAsync(Command(), CancellationToken.None);
+
+        var grabbing = await coordinator.StartGrabAsync(Command(), CancellationToken.None);
+        var frozen = await coordinator.FreezeGrabAsync(Command(), CancellationToken.None);
+
+        Assert.Equal(nameof(DeviceStatus.Grabbing), grabbing.Device.Status);
+        Assert.Equal(nameof(DeviceStatus.Connected), frozen.Device.Status);
+    }
+
+    [Fact]
+    public async Task Device_state_exposes_verified_generator_and_detector_flags_for_coordinated_hardware()
+    {
+        using var sensor = new XRaySystem.Infrastructure.Sensors.CoordinatedHardwareSensorService(
+            new XRaySystem.Infrastructure.Sensors.MockXRayGenerator(),
+            new XRaySystem.Infrastructure.Sensors.MockXRayDetector());
+        using var coordinator = new DeviceCoordinator(
+            sensor,
+            new DeviceHostOptions("test-device", IsSimulator: true),
+            CreateBuffer());
+
+        var connected = await coordinator.ConnectAsync(Command(), CancellationToken.None);
+        Assert.Equal(nameof(AcquisitionCoordinatorState.Idle), connected.Device.CoordinatorState);
+        Assert.True(connected.Device.GeneratorConnected);
+        Assert.True(connected.Device.DetectorConnected);
+        Assert.False(connected.Device.XRayActive);
+        Assert.False(connected.Device.DetectorAcquiring);
+
+        var grabbing = await coordinator.StartGrabAsync(Command(), CancellationToken.None);
+        Assert.Equal(nameof(AcquisitionCoordinatorState.Grabbing), grabbing.Device.CoordinatorState);
+        Assert.True(grabbing.Device.XRayActive);
+        Assert.True(grabbing.Device.DetectorAcquiring);
+        Assert.NotNull(grabbing.Device.ActiveAcquisitionId);
+
+        var frozen = await coordinator.FreezeGrabAsync(Command(), CancellationToken.None);
+        Assert.Equal(nameof(AcquisitionCoordinatorState.Frozen), frozen.Device.CoordinatorState);
+        Assert.False(frozen.Device.XRayActive);
+        Assert.False(frozen.Device.DetectorAcquiring);
+        Assert.Null(frozen.Device.ActiveAcquisitionId);
+    }
+
+    [Fact]
+    public async Task Abort_preempts_an_active_snap_without_waiting_for_the_command_queue()
+    {
+        using var sensor = new XRaySystem.Infrastructure.Sensors.MockXRaySensorService
+        {
+            Parameters = new AcquisitionParameters(70, 3500, 2000)
+        };
+        using var coordinator = new DeviceCoordinator(
+            sensor,
+            new DeviceHostOptions("test-device", IsSimulator: true),
+            CreateBuffer());
+        await coordinator.ConnectAsync(Command(), CancellationToken.None);
+        var snapTask = coordinator.SnapAsync(
+            new SnapCommandRequest(Guid.NewGuid(), SnapFrameModeContract.Raw),
+            CancellationToken.None);
+        for (var attempt = 0; attempt < 100 && sensor.CurrentStatus != DeviceStatus.Snapping; attempt++)
+            await Task.Delay(10);
+        Assert.Equal(DeviceStatus.Snapping, sensor.CurrentStatus);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var aborted = await coordinator.AbortAsync(Command(), CancellationToken.None);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => snapTask);
+        stopwatch.Stop();
+
+        Assert.True(aborted.Succeeded);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
+        Assert.Equal(nameof(DeviceStatus.Connected), aborted.Device.Status);
+    }
+
+    [Fact]
+    public async Task Disconnect_safe_stops_an_active_snap_before_releasing_the_device()
+    {
+        using var sensor = new XRaySystem.Infrastructure.Sensors.MockXRaySensorService
+        {
+            Parameters = new AcquisitionParameters(70, 3500, 2000)
+        };
+        using var coordinator = new DeviceCoordinator(
+            sensor,
+            new DeviceHostOptions("test-device", IsSimulator: true),
+            CreateBuffer());
+        await coordinator.ConnectAsync(Command(), CancellationToken.None);
+        var snapTask = coordinator.SnapAsync(
+            new SnapCommandRequest(Guid.NewGuid(), SnapFrameModeContract.Raw),
+            CancellationToken.None);
+        for (var attempt = 0; attempt < 100 && sensor.CurrentStatus != DeviceStatus.Snapping; attempt++)
+            await Task.Delay(10);
+        Assert.Equal(DeviceStatus.Snapping, sensor.CurrentStatus);
+
+        var disconnected = await coordinator.DisconnectAsync(Command(), CancellationToken.None);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => snapTask);
+
+        Assert.Equal(nameof(DeviceStatus.Disconnected), disconnected.Device.Status);
+        Assert.Equal(DeviceStatus.Disconnected, sensor.CurrentStatus);
     }
 
     [Fact]
@@ -204,10 +336,175 @@ public sealed class DeviceCoordinatorTests
 
         await coordinator.SnapAsync(command, CancellationToken.None);
 
-        Assert.Equal([0, 20, 60, 85, 100], publisher.Progress.Select(item => item.Percent));
+        Assert.Equal([0, 20, 60, 75, 85, 90, 100], publisher.Progress.Select(item => item.Percent));
         Assert.All(publisher.Progress, item => Assert.Equal(command.CommandId, item.CommandId));
         Assert.Equal("completed", publisher.Progress[^1].Stage);
         Assert.Empty(publisher.Errors);
+    }
+
+    [Fact]
+    public async Task Snap_persists_verified_raw_and_preview_on_the_device_before_success()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "xray-device-archive-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var sensor = new TestSensor();
+            var buffer = CreateBuffer();
+            var archive = new DeviceAcquisitionArchive(
+                new DeviceAcquisitionArchiveOptions(
+                    true,
+                    folder,
+                    RequireSignedMetadata: true,
+                    IntegrityKey: "device-coordinator-integrity-test-key-0001"),
+                NullLogger<DeviceAcquisitionArchive>.Instance);
+            using var coordinator = new DeviceCoordinator(
+                sensor,
+                new DeviceHostOptions("test-device", IsSimulator: true),
+                buffer,
+                acquisitionArchive: archive);
+            await coordinator.ConnectAsync(Command(), CancellationToken.None);
+
+            var snap = await coordinator.SnapAsync(Command(), CancellationToken.None);
+
+            Assert.True(snap.Image.PersistedOnDevice);
+            Assert.Equal(1, buffer.Count);
+            var rawPath = Assert.Single(Directory.GetFiles(folder, "*.xrayraw"));
+            Assert.Single(Directory.GetFiles(folder, "*.bmp"));
+            Assert.Single(Directory.GetFiles(folder, "*.xraymeta.json"));
+            Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
+            using var stream = File.OpenRead(rawPath);
+            var restored = Gray16RawFileCodec.Read(stream);
+            Assert.Equal(snap.Image.AcquisitionId, restored.AcquisitionId);
+
+            var recovered = Assert.Single(archive.LoadRecent(10));
+            Assert.Equal(snap.Image.ImageId, recovered.Metadata.ImageId);
+            Assert.Equal(snap.Image.AcquisitionId, recovered.Frame.AcquisitionId);
+            Assert.Equal(snap.Image.MeasuredTelemetry, recovered.Metadata.MeasuredTelemetry);
+            Assert.True(recovered.Metadata.PersistedOnDevice);
+
+            var recoveredOptions = new RemoteImageBufferOptions(
+                ImageLimit: 3,
+                MaxBytes: 32L * 1024 * 1024,
+                TimeToLive: TimeSpan.FromMinutes(1));
+            var recoveredBuffer = new RemoteImageBuffer(recoveredOptions);
+            var recoveryService = new DeviceArchiveRecoveryService(
+                archive,
+                recoveredBuffer,
+                recoveredOptions,
+                NullLogger<DeviceArchiveRecoveryService>.Instance);
+            await recoveryService.StartAsync(CancellationToken.None);
+            Assert.Equal(snap.Image.ImageId, Assert.Single(recoveredBuffer.GetMetadata()).ImageId);
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Archive_recovery_ignores_a_preview_that_no_longer_matches_its_manifest_hash()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "xray-device-archive-corrupt-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var sensor = new TestSensor();
+            var archive = new DeviceAcquisitionArchive(
+                new DeviceAcquisitionArchiveOptions(true, folder),
+                NullLogger<DeviceAcquisitionArchive>.Instance);
+            using var coordinator = new DeviceCoordinator(
+                sensor,
+                new DeviceHostOptions("test-device", IsSimulator: true),
+                CreateBuffer(),
+                acquisitionArchive: archive);
+            await coordinator.ConnectAsync(Command(), CancellationToken.None);
+            await coordinator.SnapAsync(Command(), CancellationToken.None);
+            var previewPath = Assert.Single(Directory.GetFiles(folder, "*.bmp"));
+            var tampered = File.ReadAllBytes(previewPath);
+            tampered[^1] ^= 0xFF;
+            File.WriteAllBytes(previewPath, tampered);
+
+            Assert.Empty(archive.LoadRecent(10));
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Signed_archive_recovery_rejects_valid_json_when_metadata_was_tampered()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "xray-device-archive-signed-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            const string integrityKey = "signed-archive-integrity-test-key-000001";
+            var sensor = new TestSensor();
+            var archive = new DeviceAcquisitionArchive(
+                new DeviceAcquisitionArchiveOptions(
+                    true,
+                    folder,
+                    RequireSignedMetadata: true,
+                    IntegrityKey: integrityKey),
+                NullLogger<DeviceAcquisitionArchive>.Instance);
+            using var coordinator = new DeviceCoordinator(
+                sensor,
+                new DeviceHostOptions("test-device", IsSimulator: true),
+                CreateBuffer(),
+                acquisitionArchive: archive);
+            await coordinator.ConnectAsync(Command(), CancellationToken.None);
+            await coordinator.SnapAsync(Command(), CancellationToken.None);
+            var manifestPath = Assert.Single(Directory.GetFiles(folder, "*.xraymeta.json"));
+            var json = File.ReadAllText(manifestPath);
+            Assert.Contains("integrityHmacSha256", json, StringComparison.Ordinal);
+            var tamperedJson = json.Replace("\"powerW\":3500", "\"powerW\":3501");
+            Assert.NotEqual(json, tamperedJson);
+            File.WriteAllText(manifestPath, tamperedJson);
+
+            Assert.Empty(archive.LoadRecent(10));
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Signed_archive_requires_a_strong_integrity_key()
+    {
+        var missing = new DeviceAcquisitionArchiveOptions(
+            true,
+            Path.Combine(Path.GetTempPath(), "xray-unused-archive"),
+            RequireSignedMetadata: true);
+        var weak = missing with { IntegrityKey = "too-short" };
+
+        Assert.Throws<ArgumentException>(missing.EnsureValid);
+        Assert.Throws<ArgumentException>(weak.EnsureValid);
+    }
+
+    [Fact]
+    public async Task Persistence_failure_is_not_reported_as_success_and_retry_does_not_repeat_exposure()
+    {
+        var sensor = new TestSensor();
+        var buffer = CreateBuffer();
+        var publisher = new TrackingEventPublisher();
+        using var coordinator = new DeviceCoordinator(
+            sensor,
+            new DeviceHostOptions("test-device", IsSimulator: true),
+            buffer,
+            publisher,
+            new FailingArchive());
+        await coordinator.ConnectAsync(Command(), CancellationToken.None);
+        var command = Command();
+
+        await Assert.ThrowsAsync<AcquisitionPersistenceException>(() =>
+            coordinator.SnapAsync(command, CancellationToken.None));
+        await Assert.ThrowsAsync<AcquisitionPersistenceException>(() =>
+            coordinator.SnapAsync(command, CancellationToken.None));
+
+        Assert.Equal(1, sensor.SnapCalls);
+        Assert.Equal(0, buffer.Count);
+        Assert.Equal(2, publisher.Errors.Count(error => error.Code == "persistence_failed"));
+        Assert.DoesNotContain(publisher.Progress, progress => progress.Stage == "completed");
     }
 
     [Fact]
@@ -258,6 +555,19 @@ public sealed class DeviceCoordinatorTests
         }
     }
 
+    private sealed class FailingArchive : IDeviceAcquisitionArchive
+    {
+        public DeviceAcquisitionArchiveReceipt Save(
+            XRayMeasurement measurement,
+            RemoteImageMetadataContract metadata,
+            byte[] lowPreviewBmp) =>
+            throw new AcquisitionPersistenceException(
+                "Test persistence failure.",
+                new IOException("Disk unavailable."));
+
+        public IReadOnlyList<ArchivedRemoteImage> LoadRecent(int maximumCount) => [];
+    }
+
     private sealed class TestSensor(TimeSpan? operationDelay = null) : ISensorService
     {
         private int _activeOperations;
@@ -271,6 +581,7 @@ public sealed class DeviceCoordinatorTests
         public int MaxConcurrentOperations => Volatile.Read(ref _maxConcurrentOperations);
         public int ConnectCalls { get; private set; }
         public int SnapCalls { get; private set; }
+        public SnapFrameMode LastSnapMode { get; private set; } = SnapFrameMode.Raw;
 
         public Task ConnectAsync() => RunAsync(() =>
         {
@@ -289,21 +600,27 @@ public sealed class DeviceCoordinatorTests
 
         public Task StopCaptureAsync() => RunAsync(() => SetStatus(DeviceStatus.Connected));
 
-        public async Task<XRayMeasurement> SnapAsync(
+        public Task<XRayMeasurement> SnapAsync(
             double exposureTime,
+            CancellationToken cancellationToken = default) =>
+            SnapAsync(new SnapRequest(exposureTime, SnapFrameMode.Raw), cancellationToken);
+
+        public async Task<XRayMeasurement> SnapAsync(
+            SnapRequest request,
             CancellationToken cancellationToken = default)
         {
             XRayMeasurement? measurement = null;
             await RunAsync(() =>
             {
                 SnapCalls++;
+                LastSnapMode = request.FrameMode;
                 if (CurrentStatus == DeviceStatus.Disconnected)
                     throw new InvalidOperationException("Cihaz bağlı değil.");
                 SetStatus(DeviceStatus.Snapping);
                 var settings = new AcquisitionSettings(
                     Parameters.TubeCurrentMa,
                     Parameters.VoltageKv,
-                    exposureTime,
+                    request.ExposureTimeMs,
                     Profile);
                 var frame = new RawGray16Frame(
                     [1, 2, 3, 4],
@@ -315,13 +632,15 @@ public sealed class DeviceCoordinatorTests
                     DateTimeOffset.UtcNow,
                     Guid.NewGuid(),
                     settings,
-                    "test-sensor");
+                    "test-sensor",
+                    operation: AcquisitionOperation.Snap,
+                    snapFrameMode: request.FrameMode);
                 measurement = new XRayMeasurement(
                     new SensorReadings(
                         Parameters.TubeCurrentMa,
                         Parameters.VoltageKv,
                         0.5,
-                        exposureTime),
+                        request.ExposureTimeMs),
                     frame,
                     isSimulator: true);
                 SetStatus(DeviceStatus.Frozen);

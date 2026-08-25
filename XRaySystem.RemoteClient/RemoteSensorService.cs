@@ -11,7 +11,7 @@ namespace XRaySystem.RemoteClient;
 /// Adapts DeviceHost REST/SignalR contracts to the existing sensor-neutral
 /// domain interface so WPF and MAUI ViewModels can run unchanged in remote mode.
 /// </summary>
-public sealed class RemoteSensorService : ISensorService, IDisposable
+public sealed class RemoteSensorService : IAcquisitionCoordinator, IDisposable
 {
     private readonly IRemoteDeviceClient _client;
     private AcquisitionParameters _parameters = new(70, 3500, 500);
@@ -19,13 +19,25 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
     private int _currentStatus = (int)DeviceStatus.Disconnected;
     private TelemetryEventContract? _latestTelemetry;
     private int _initialConnectCompleted;
+    private long _lastStateSequence = -1;
+    private int _eventsConnected;
     private bool _isSimulator = true;
+    private AcquisitionHardwareState _hardwareState = new(
+        AcquisitionCoordinatorState.Disconnected,
+        GeneratorConnected: false,
+        DetectorConnected: false,
+        XRayActive: false,
+        DetectorAcquiring: false,
+        ActiveAcquisitionId: null,
+        IsVerified: false,
+        VerifiedAtUtc: null);
     private bool _disposed;
 
     public RemoteSensorService(IRemoteDeviceClient client)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _client.StatusChanged += OnRemoteStatusChanged;
+        _client.HardwareStateReceived += OnRemoteHardwareStateReceived;
         _client.TelemetryReceived += OnTelemetryReceived;
         _client.LowFrameReceived += OnLowFrameReceived;
         _client.ErrorReceived += OnRemoteError;
@@ -33,9 +45,12 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
     }
 
     public DeviceStatus CurrentStatus => (DeviceStatus)Volatile.Read(ref _currentStatus);
+    public AcquisitionCoordinatorState CoordinatorState => Volatile.Read(ref _hardwareState).CoordinatorState;
+    public AcquisitionHardwareState HardwareState => Volatile.Read(ref _hardwareState);
 
     public event Action<DeviceStatus>? StatusChanged;
     public event Action<XRayMeasurement>? MeasurementReceived;
+    public event Action<AcquisitionHardwareState>? HardwareStateChanged;
 
     public AcquisitionProfile Profile
     {
@@ -61,6 +76,7 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
     public async Task ConnectAsync()
     {
         ThrowIfDisposed();
+        await _client.ValidateProtocolAsync().ConfigureAwait(false);
         await _client.ConnectEventsAsync().ConfigureAwait(false);
         var result = await _client.ConnectDeviceAsync().ConfigureAwait(false);
         EnsureSucceeded(result.Succeeded, result.Message);
@@ -73,6 +89,8 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
         if (_disposed) return;
         try
         {
+            if (CurrentStatus is DeviceStatus.Grabbing or DeviceStatus.Snapping)
+                await AbortAsync().ConfigureAwait(false);
             var result = await _client.DisconnectDeviceAsync().ConfigureAwait(false);
             EnsureSucceeded(result.Succeeded, result.Message);
             ApplyState(result.Device);
@@ -88,7 +106,7 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
     {
         ThrowIfDisposed();
         await PushParametersAsync().ConfigureAwait(false);
-        var result = await _client.StartLiveAsync().ConfigureAwait(false);
+        var result = await _client.StartGrabAsync().ConfigureAwait(false);
         EnsureSucceeded(result.Succeeded, result.Message);
         ApplyState(result.Device);
     }
@@ -96,22 +114,40 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
     public async Task StopCaptureAsync()
     {
         ThrowIfDisposed();
-        var result = await _client.StopLiveAsync().ConfigureAwait(false);
+        var result = await _client.FreezeGrabAsync().ConfigureAwait(false);
         EnsureSucceeded(result.Succeeded, result.Message);
         ApplyState(result.Device);
     }
 
-    public async Task<XRayMeasurement> SnapAsync(
+    public async Task AbortAsync()
+    {
+        ThrowIfDisposed();
+        var result = await _client.AbortAsync().ConfigureAwait(false);
+        EnsureSucceeded(result.Succeeded, result.Message);
+        ApplyState(result.Device);
+    }
+
+    public Task<XRayMeasurement> SnapAsync(
         double exposureTime,
+        CancellationToken cancellationToken = default) =>
+        SnapAsync(new SnapRequest(exposureTime, SnapFrameMode.Raw), cancellationToken);
+
+    public async Task<XRayMeasurement> SnapAsync(
+        SnapRequest request,
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        var parameters = Parameters with { ExposureTimeMs = exposureTime };
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+        var parameters = Parameters with { ExposureTimeMs = request.ExposureTimeMs };
         parameters.EnsureValid();
         Parameters = parameters;
         await PushParametersAsync(cancellationToken).ConfigureAwait(false);
 
-        var result = await _client.SnapAsync(cancellationToken).ConfigureAwait(false);
+        var contractMode = request.FrameMode == SnapFrameMode.Low
+            ? SnapFrameModeContract.Low
+            : SnapFrameModeContract.Raw;
+        var result = await _client.SnapAsync(contractMode, cancellationToken).ConfigureAwait(false);
         EnsureSucceeded(result.Succeeded, result.Message);
         ApplyState(result.Device);
         var rawBytes = await _client
@@ -129,9 +165,16 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
                 measured.TubeCurrentMa,
                 measured.VoltageKv,
                 measured.XRayIntensity,
-                measured.ExposureTimeMs),
+                measured.ExposureTimeMs,
+                ToDomain(measured.TubeCurrentProvenance),
+                ToDomain(measured.VoltageProvenance),
+                ToDomain(measured.ExposureTimeProvenance)),
             frame,
-            result.Device.IsSimulator);
+            result.Device.IsSimulator,
+            new AcquisitionParameters(
+                result.Image.RequestedParameters.VoltageKv,
+                result.Image.RequestedParameters.PowerW,
+                result.Image.RequestedParameters.ExposureTimeMs));
         PublishMeasurement(measurement);
         return measurement;
     }
@@ -154,15 +197,48 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
 
     private void OnRemoteStatusChanged(DeviceStateContract state)
     {
-        try { ApplyState(state); }
+        if (Volatile.Read(ref _eventsConnected) == 0) return;
+        try { ApplyState(state, applyConfiguration: false); }
         catch { SetStatus(DeviceStatus.Error); }
     }
 
-    private void OnTelemetryReceived(TelemetryEventContract telemetry) =>
-        Volatile.Write(ref _latestTelemetry, telemetry);
+    private void OnRemoteHardwareStateReceived(HardwareStateEventContract state)
+    {
+        if (Volatile.Read(ref _eventsConnected) == 0) return;
+        try
+        {
+            if (!AcceptStateSequence(state.SequenceNumber)) return;
+            ApplyHardwareState(
+                state.CoordinatorState,
+                state.GeneratorConnected,
+                state.DetectorConnected,
+                state.XRayActive,
+                state.DetectorAcquiring,
+                state.ActiveAcquisitionId,
+                state.TimestampUtc);
+        }
+        catch
+        {
+            ApplyHardwareState(
+                nameof(AcquisitionCoordinatorState.Faulted),
+                GeneratorConnected: false,
+                DetectorConnected: false,
+                XRayActive: false,
+                DetectorAcquiring: false,
+                ActiveAcquisitionId: null,
+                VerifiedAtUtc: null);
+        }
+    }
+
+    private void OnTelemetryReceived(TelemetryEventContract telemetry)
+    {
+        if (Volatile.Read(ref _eventsConnected) != 0)
+            Volatile.Write(ref _latestTelemetry, telemetry);
+    }
 
     private void OnLowFrameReceived(RemoteLowFrame remoteFrame)
     {
+        if (Volatile.Read(ref _eventsConnected) == 0) return;
         try
         {
             var decoded = Gray8BmpDecoder.Decode(remoteFrame.BmpBytes);
@@ -180,7 +256,7 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
                 decoded.Height,
                 checked(decoded.Width * sizeof(ushort)),
                 Gray16PixelFormat.Gray16LittleEndian,
-                FrameKind.LivePreview,
+                FrameKind.GrabPreview,
                 telemetry.SequenceNumber == remoteFrame.FrameSequence
                     ? telemetry.CapturedAtUtc
                     : DateTimeOffset.UtcNow,
@@ -190,16 +266,24 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
                     measured.VoltageKv,
                     measured.ExposureTimeMs,
                     profile),
-                $"remote-low-bmp:{remoteFrame.FrameSequence}",
-                sourceOrientation: "top-left");
+                $"remote-grab-low-bmp:{remoteFrame.FrameSequence}",
+                sourceOrientation: "top-left",
+                operation: AcquisitionOperation.Grab);
             var measurement = new XRayMeasurement(
                 new SensorReadings(
                     measured.TubeCurrentMa,
                     measured.VoltageKv,
                     measured.XRayIntensity,
-                    measured.ExposureTimeMs),
+                    measured.ExposureTimeMs,
+                    ToDomain(measured.TubeCurrentProvenance),
+                    ToDomain(measured.VoltageProvenance),
+                    ToDomain(measured.ExposureTimeProvenance)),
                 frame,
-                _isSimulator);
+                _isSimulator,
+                new AcquisitionParameters(
+                    telemetry.RequestedParameters.VoltageKv,
+                    telemetry.RequestedParameters.PowerW,
+                    telemetry.RequestedParameters.ExposureTimeMs));
             PublishMeasurement(measurement);
         }
         catch
@@ -208,16 +292,23 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
         }
     }
 
-    private void OnRemoteError(DeviceErrorEventContract _) => SetStatus(DeviceStatus.Error);
+    private void OnRemoteError(DeviceErrorEventContract _)
+    {
+        if (Volatile.Read(ref _eventsConnected) != 0)
+            SetStatus(DeviceStatus.Error);
+    }
 
     private void OnConnectionStateChanged(bool connected)
     {
+        Volatile.Write(ref _eventsConnected, connected ? 1 : 0);
         if (!connected)
         {
+            MarkHardwareStateUnverified();
             if (CurrentStatus != DeviceStatus.Disconnected) SetStatus(DeviceStatus.Error);
             return;
         }
 
+        Interlocked.Exchange(ref _lastStateSequence, -1);
         if (Volatile.Read(ref _initialConnectCompleted) != 0)
             _ = RefreshStateAfterReconnectAsync();
     }
@@ -228,21 +319,102 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
         catch { SetStatus(DeviceStatus.Error); }
     }
 
-    private void ApplyState(DeviceStateContract state)
+    private void ApplyState(DeviceStateContract state, bool applyConfiguration = true)
     {
+        if (!AcceptStateSequence(state.SequenceNumber)) return;
         if (!Enum.TryParse<DeviceStatus>(state.Status, ignoreCase: true, out var status) ||
             !Enum.IsDefined(status))
             throw new InvalidDataException($"Remote cihaz durumu geçersiz: {state.Status}");
 
-        var parameters = new AcquisitionParameters(
-            state.Parameters.VoltageKv,
-            state.Parameters.PowerW,
-            state.Parameters.ExposureTimeMs);
-        parameters.EnsureValid();
-        Volatile.Write(ref _parameters, parameters);
-        Volatile.Write(ref _profile, (int)ParseProfile(state.Profile));
+        if (applyConfiguration)
+        {
+            var parameters = new AcquisitionParameters(
+                state.Parameters.VoltageKv,
+                state.Parameters.PowerW,
+                state.Parameters.ExposureTimeMs);
+            parameters.EnsureValid();
+            Volatile.Write(ref _parameters, parameters);
+            Volatile.Write(ref _profile, (int)ParseProfile(state.Profile));
+        }
         _isSimulator = state.IsSimulator;
+        ApplyHardwareState(
+            state.CoordinatorState,
+            state.GeneratorConnected,
+            state.DetectorConnected,
+            state.XRayActive,
+            state.DetectorAcquiring,
+            state.ActiveAcquisitionId,
+            state.TimestampUtc);
         SetStatus(status);
+    }
+
+    private bool AcceptStateSequence(long sequence)
+    {
+        if (sequence < 0) throw new InvalidDataException("Remote cihaz sequence değeri negatif olamaz.");
+        while (true)
+        {
+            var observed = Interlocked.Read(ref _lastStateSequence);
+            if (sequence < observed) return false;
+            if (sequence == observed ||
+                Interlocked.CompareExchange(ref _lastStateSequence, sequence, observed) == observed)
+                return true;
+        }
+    }
+
+    private void ApplyHardwareState(
+        string? coordinatorState,
+        bool? GeneratorConnected,
+        bool? DetectorConnected,
+        bool? XRayActive,
+        bool? DetectorAcquiring,
+        Guid? ActiveAcquisitionId,
+        DateTimeOffset? VerifiedAtUtc)
+    {
+        var parsedState = AcquisitionCoordinatorState.Disconnected;
+        if (coordinatorState is not null &&
+            (!Enum.TryParse(coordinatorState, ignoreCase: true, out parsedState) || !Enum.IsDefined(parsedState)))
+            throw new InvalidDataException($"Remote acquisition coordinator durumu geçersiz: {coordinatorState}");
+        var isVerified = coordinatorState is not null &&
+            GeneratorConnected.HasValue && DetectorConnected.HasValue &&
+            XRayActive.HasValue && DetectorAcquiring.HasValue &&
+            Volatile.Read(ref _eventsConnected) != 0;
+        var next = new AcquisitionHardwareState(
+            parsedState,
+            GeneratorConnected == true,
+            DetectorConnected == true,
+            XRayActive == true,
+            DetectorAcquiring == true,
+            ActiveAcquisitionId,
+            isVerified,
+            isVerified ? VerifiedAtUtc?.ToUniversalTime() : null);
+        PublishHardwareState(next);
+    }
+
+    private void MarkHardwareStateUnverified()
+    {
+        var current = Volatile.Read(ref _hardwareState);
+        PublishHardwareState(current with
+        {
+            CoordinatorState = AcquisitionCoordinatorState.Faulted,
+            XRayActive = false,
+            DetectorAcquiring = false,
+            ActiveAcquisitionId = null,
+            IsVerified = false,
+            VerifiedAtUtc = null
+        });
+    }
+
+    private void PublishHardwareState(AcquisitionHardwareState next)
+    {
+        var previous = Interlocked.Exchange(ref _hardwareState, next);
+        if (previous == next) return;
+        var handlers = HardwareStateChanged;
+        if (handlers is null) return;
+        foreach (Action<AcquisitionHardwareState> handler in handlers.GetInvocationList())
+        {
+            try { handler(next); }
+            catch { }
+        }
     }
 
     private void SetStatus(DeviceStatus status)
@@ -277,6 +449,15 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
         return parsed;
     }
 
+    private static MeasurementProvenance ToDomain(MeasurementProvenanceContract provenance) =>
+        provenance switch
+        {
+            MeasurementProvenanceContract.Measured => MeasurementProvenance.Measured,
+            MeasurementProvenanceContract.AppliedTarget => MeasurementProvenance.AppliedTarget,
+            MeasurementProvenanceContract.Derived => MeasurementProvenance.Derived,
+            _ => MeasurementProvenance.Unknown
+        };
+
     private static void EnsureRawMatchesMetadata(
         RawGray16Frame frame,
         RemoteImageMetadataContract metadata)
@@ -287,7 +468,13 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
             frame.StrideBytes != metadata.StrideBytes ||
             !string.Equals(frame.PixelFormat.ToString(), metadata.PixelFormat, StringComparison.Ordinal) ||
             !string.Equals(frame.Kind.ToString(), metadata.Kind, StringComparison.Ordinal) ||
-            !string.Equals(frame.Settings.Profile.ToString(), metadata.Profile, StringComparison.Ordinal))
+            !string.Equals(frame.Settings.Profile.ToString(), metadata.Profile, StringComparison.Ordinal) ||
+            metadata.Operation != AcquisitionOperationContract.Snap ||
+            metadata.SnapFrameMode is null ||
+            frame.Operation != AcquisitionOperation.Snap ||
+            frame.SnapFrameMode != (metadata.SnapFrameMode == SnapFrameModeContract.Low
+                ? SnapFrameMode.Low
+                : SnapFrameMode.Raw))
             throw new InvalidDataException("Remote raw görüntü ve SNAP metadata uyuşmuyor.");
     }
 
@@ -303,6 +490,7 @@ public sealed class RemoteSensorService : ISensorService, IDisposable
         if (_disposed) return;
         _disposed = true;
         _client.StatusChanged -= OnRemoteStatusChanged;
+        _client.HardwareStateReceived -= OnRemoteHardwareStateReceived;
         _client.TelemetryReceived -= OnTelemetryReceived;
         _client.LowFrameReceived -= OnLowFrameReceived;
         _client.ErrorReceived -= OnRemoteError;

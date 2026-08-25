@@ -6,12 +6,14 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.Controls;
+using Microsoft.Maui.Dispatching;
 using XRaySystem.Application.UseCases;
 using XRaySystem.Application.DTOs;
 using XRaySystem.Domain.Entities;
 using XRaySystem.Domain.Interfaces;
 using XRaySystem.Domain.ValueObjects;
 using XRaySystem.Domain.WindowLevel;
+using XRaySystem.Infrastructure.Concurrency;
 using XRaySystem.Mobile.Services;
 using XRaySystem.RemoteClient;
 
@@ -19,6 +21,10 @@ namespace XRaySystem.Mobile.ViewModels;
 
 public partial class MainViewModel : ObservableObject
 {
+    private const double DefaultVoltageKv = 70.0;
+    private const double DefaultPowerW = 210.0;
+    private const double DefaultExposureTimeMs = 200.0;
+
     private readonly ISensorService _sensorService;
     private readonly SnapMeasurementUseCase _snapMeasurement;
     private readonly SaveMeasurementUseCase _saveMeasurement;
@@ -26,26 +32,32 @@ public partial class MainViewModel : ObservableObject
     private readonly MauiImageStorageService _imageStorage;
     private readonly MauiWindowLevelRenderer _renderer;
     private readonly MobileSensorModeSettings _sensorModeSettings;
+    private readonly DatabaseInitializationState _databaseInitialization;
     private readonly SensorRuntimeOptions _activeRuntime;
 
     private CancellationTokenSource? _snapCts;
     private RawGray16Frame? _currentRawFrame;
-    private RenderRequest? _pendingRender;
-    private int _renderWorkerRunning;
+    private readonly LatestValueWorker<RenderRequest> _renderWorker;
     private int _suppressWindowRender;
     private long _renderVersion;
+    private long _lastFrameUtcTicks;
+    private IDispatcherTimer? _frameFreshnessTimer;
     private bool _historyInitialized;
 
     public event Action? ReviewImageOpened;
+    public event Action<byte[], int, int>? PresentationFrameReady;
 
     private sealed record RenderRequest(RawGray16Frame Frame, int Center, int Width, long Version);
 
     public IReadOnlyList<string> ConnectionModeOptions { get; } =
-        ["Yerel mock", "DeviceHost (remote)"];
+        ["Local mock", "Remote DeviceHost"];
+    public IReadOnlyList<SnapFrameMode> SnapFrameModeOptions { get; } =
+        Enum.GetValues<SnapFrameMode>();
 
     public ObservableCollection<SensorDataDto> RecentImages { get; } = [];
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSelectSnapFrameMode))]
     private DeviceStatus _status = DeviceStatus.Disconnected;
 
     [ObservableProperty]
@@ -54,7 +66,7 @@ public partial class MainViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(AcquisitionParametersAreValid))]
     [NotifyPropertyChangedFor(nameof(ParametersValidationMessage))]
     [NotifyPropertyChangedFor(nameof(ParametersAccentColor))]
-    private double _kv = 70.0;
+    private double _kv = DefaultVoltageKv;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
@@ -62,7 +74,7 @@ public partial class MainViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(AcquisitionParametersAreValid))]
     [NotifyPropertyChangedFor(nameof(ParametersValidationMessage))]
     [NotifyPropertyChangedFor(nameof(ParametersAccentColor))]
-    private double _watt = 3500.0;
+    private double _watt = DefaultPowerW;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
@@ -70,7 +82,7 @@ public partial class MainViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(AcquisitionParametersAreValid))]
     [NotifyPropertyChangedFor(nameof(ParametersValidationMessage))]
     [NotifyPropertyChangedFor(nameof(ParametersAccentColor))]
-    private double _exposureTime = 1000.0;
+    private double _exposureTime = DefaultExposureTimeMs;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsRemoteConnectionMode))]
@@ -83,6 +95,17 @@ public partial class MainViewModel : ObservableObject
     private string _remoteDeviceId = "mock-01";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SnapActionText))]
+    private SnapFrameMode _selectedSnapFrameMode = SnapFrameMode.Raw;
+
+    [ObservableProperty]
+    private string _remoteApiKey = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DeviceHostCredentialStatusText))]
+    private bool _hasStoredDeviceHostApiKey;
+
+    [ObservableProperty]
     private ImageSource? _currentImage;
 
     [ObservableProperty]
@@ -90,9 +113,35 @@ public partial class MainViewModel : ObservableObject
     private bool _hasCurrentImage;
 
     [ObservableProperty]
-    private string _statusMessage = "Sistem hazır. Cihaz bağlantısı bekleniyor.";
+    private string _statusMessage = "System ready. Waiting for a device connection.";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(XRayHardwareStateText))]
+    [NotifyPropertyChangedFor(nameof(XRayHardwareStateColor))]
+    private bool _hasVerifiedHardwareState;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(XRayHardwareStateText))]
+    [NotifyPropertyChangedFor(nameof(XRayHardwareStateColor))]
+    private bool _isXRayActive;
+
+    [ObservableProperty]
+    private string _generatorHardwareStateText = "UNVERIFIED";
+
+    [ObservableProperty]
+    private string _detectorHardwareStateText = "UNVERIFIED";
+
+    [ObservableProperty]
+    private string _acquisitionCoordinatorStateText = "NO STATE";
+
+    [ObservableProperty]
+    private string _dataSourceStatusText = "DATA SOURCE: UNVERIFIED";
+
+    [ObservableProperty]
+    private string _dataSourceStatusColor = "#667991";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSelectSnapFrameMode))]
     private bool _isBusy;
 
     [ObservableProperty]
@@ -121,7 +170,13 @@ public partial class MainViewModel : ObservableObject
     private string _frameMetadataText = "NO FRAME · 16-BIT";
 
     [ObservableProperty]
-    private string _lastFrameTimeText = "Henüz görüntü alınmadı";
+    private string _lastFrameTimeText = "No image acquired yet";
+
+    [ObservableProperty]
+    private string _frameFreshnessText = "NO FRAME";
+
+    [ObservableProperty]
+    private string _frameFreshnessColor = "#667991";
 
     [ObservableProperty]
     private int _currentFrameWidth;
@@ -139,36 +194,39 @@ public partial class MainViewModel : ObservableObject
     public bool HasNoRecentImages => !HasRecentImages;
     public bool IsRemoteConnectionMode => SelectedConnectionModeIndex == 1;
     public string ActiveConnectionModeText => _activeRuntime.Mode == SensorRuntimeMode.Remote
-        ? "AKTİF: REMOTE"
-        : "AKTİF: YEREL MOCK";
+        ? "ACTIVE: REMOTE"
+        : "ACTIVE: LOCAL MOCK";
+    public string DeviceHostCredentialStatusText => HasStoredDeviceHostApiKey
+        ? "API key stored in secure storage."
+        : "No API key is stored.";
+    public string SnapActionText => "SNAP";
+    public bool CanSelectSnapFrameMode => !IsBusy && Status != DeviceStatus.Grabbing;
 
     public bool AcquisitionParametersAreValid =>
         new AcquisitionParameters(Kv, Watt, ExposureTime).IsValid;
 
     public string ParametersValidationMessage => AcquisitionParametersAreValid
-        ? $"Hazır · {Kv:F0} kV · {Watt:F0} W · {ExposureTime:F0} ms"
-        : "kV ve Watt sıfırdan büyük, süre 1–3000 ms aralığında olmalıdır.";
+        ? $"Ready · {Kv:F0} kV · {Watt:F0} W · {ExposureTime:F0} ms"
+        : "kV and W must be above zero; exposure must be between 1 and 3000 ms.";
 
     public string ParametersAccentColor => AcquisitionParametersAreValid ? "#32D74B" : "#FF4D5E";
 
     public string StatusDisplayText => Status switch
     {
-        DeviceStatus.Connected => "HAZIR",
-        DeviceStatus.Capturing => "CANLI",
-        DeviceStatus.Snapping => "ÇEKİM",
-        DeviceStatus.Frozen => "DONDURULDU",
-        DeviceStatus.Error => "HATA",
-        _ => "BAĞLANTI YOK"
+        DeviceStatus.Connected => "READY",
+        DeviceStatus.Grabbing => "GRAB",
+        DeviceStatus.Snapping => "SNAP",
+        DeviceStatus.Frozen => "FROZEN",
+        DeviceStatus.Error => "ERROR",
+        _ => "DISCONNECTED"
     };
 
-    public string StartLiveActionText => Status == DeviceStatus.Frozen
-        ? "CANLIYA DÖN"
-        : "CANLI BAŞLAT";
+    public string StartLiveActionText => "GRAB";
 
     public string StatusAccentColor => Status switch
     {
         DeviceStatus.Connected => "#32D74B",
-        DeviceStatus.Capturing => "#00E5FF",
+        DeviceStatus.Grabbing => "#00E5FF",
         DeviceStatus.Snapping => "#FFB020",
         DeviceStatus.Frozen => "#FFB020",
         DeviceStatus.Error => "#FF4D5E",
@@ -178,12 +236,24 @@ public partial class MainViewModel : ObservableObject
     public string StatusBadgeBackground => Status switch
     {
         DeviceStatus.Connected => "#163A27",
-        DeviceStatus.Capturing => "#123844",
+        DeviceStatus.Grabbing => "#123844",
         DeviceStatus.Snapping => "#3C2A13",
         DeviceStatus.Frozen => "#3C2A13",
         DeviceStatus.Error => "#351720",
         _ => "#182131"
     };
+
+    public string XRayHardwareStateText => !HasVerifiedHardwareState
+        ? "X-RAY STATE UNVERIFIED"
+        : IsXRayActive
+            ? "X-RAY ACTIVE"
+            : "X-RAY OFF";
+
+    public string XRayHardwareStateColor => !HasVerifiedHardwareState
+        ? "#667991"
+        : IsXRayActive
+            ? "#FF4D5E"
+            : "#32D74B";
 
     public MainViewModel(
         ISensorService sensorService,
@@ -193,6 +263,7 @@ public partial class MainViewModel : ObservableObject
         MauiImageStorageService imageStorage,
         MauiWindowLevelRenderer renderer,
         MobileSensorModeSettings sensorModeSettings,
+        DatabaseInitializationState databaseInitialization,
         SensorRuntimeOptions activeRuntime)
     {
         _sensorService = sensorService;
@@ -202,7 +273,11 @@ public partial class MainViewModel : ObservableObject
         _imageStorage = imageStorage;
         _renderer = renderer;
         _sensorModeSettings = sensorModeSettings;
+        _databaseInitialization = databaseInitialization;
         _activeRuntime = activeRuntime;
+        _renderWorker = new LatestValueWorker<RenderRequest>(
+            ProcessRenderRequest,
+            ReportRenderFailure);
         _sensorService.Profile = AcquisitionProfile.IndustrialQaPhantom;
         SelectedConnectionModeIndex = activeRuntime.Mode == SensorRuntimeMode.Remote ? 1 : 0;
         DeviceHostUrl = activeRuntime.DeviceHostBaseAddress.AbsoluteUri;
@@ -212,6 +287,8 @@ public partial class MainViewModel : ObservableObject
             MainThread.BeginInvokeOnMainThread(() => Status = status);
 
         _sensorService.MeasurementReceived += measurement => AcceptMeasurement(measurement, queueRender: true);
+        if (_sensorService is IAcquisitionCoordinator coordinator)
+            coordinator.HardwareStateChanged += OnHardwareStateChanged;
     }
 
     private bool CanConnect() => !IsBusy && Status == DeviceStatus.Disconnected;
@@ -220,10 +297,11 @@ public partial class MainViewModel : ObservableObject
         !IsBusy &&
         (Status is DeviceStatus.Connected or DeviceStatus.Frozen) &&
         AcquisitionParametersAreValid;
-    private bool CanStopLive() => Status is DeviceStatus.Capturing or DeviceStatus.Snapping;
+    private bool CanStopLive() => Status == DeviceStatus.Grabbing;
+    private bool CanAbort() => Status is DeviceStatus.Grabbing or DeviceStatus.Snapping;
     private bool CanSnap() =>
         !IsBusy &&
-        (Status is DeviceStatus.Connected or DeviceStatus.Capturing or DeviceStatus.Frozen) &&
+        (Status is DeviceStatus.Connected or DeviceStatus.Grabbing or DeviceStatus.Frozen) &&
         AcquisitionParametersAreValid;
     private bool CanAdjustImage() => Volatile.Read(ref _currentRawFrame) is not null;
     private bool CanApplyConnectionSettings() => !IsBusy && Status == DeviceStatus.Disconnected;
@@ -256,6 +334,12 @@ public partial class MainViewModel : ObservableObject
     partial void OnRemoteDeviceIdChanged(string value) =>
         ApplyConnectionSettingsCommand.NotifyCanExecuteChanged();
 
+    partial void OnRemoteApiKeyChanged(string value) =>
+        ApplyConnectionSettingsCommand.NotifyCanExecuteChanged();
+
+    partial void OnHasStoredDeviceHostApiKeyChanged(bool value) =>
+        ClearDeviceHostApiKeyCommand.NotifyCanExecuteChanged();
+
     partial void OnWindowCenterChanged(double value) => QueueCurrentFrameForRender();
     partial void OnWindowWidthChanged(double value) => QueueCurrentFrameForRender();
 
@@ -265,14 +349,16 @@ public partial class MainViewModel : ObservableObject
         DisconnectCommand.NotifyCanExecuteChanged();
         StartLiveCommand.NotifyCanExecuteChanged();
         StopLiveCommand.NotifyCanExecuteChanged();
+        AbortCommand.NotifyCanExecuteChanged();
         SnapCommand.NotifyCanExecuteChanged();
         AutoWindowLevelCommand.NotifyCanExecuteChanged();
         ResetWindowLevelCommand.NotifyCanExecuteChanged();
         ApplyConnectionSettingsCommand.NotifyCanExecuteChanged();
+        ClearDeviceHostApiKeyCommand.NotifyCanExecuteChanged();
     }
 
     [RelayCommand(CanExecute = nameof(CanApplyConnectionSettings))]
-    private void ApplyConnectionSettings()
+    private async Task ApplyConnectionSettingsAsync()
     {
         try
         {
@@ -281,46 +367,102 @@ public partial class MainViewModel : ObservableObject
                 : SensorRuntimeMode.Local;
             var url = new Uri(DeviceHostUrl.Trim(), UriKind.Absolute);
             var options = new SensorRuntimeOptions(mode, url, RemoteDeviceId.Trim());
+            var apiKeySaved = false;
+            if (mode == SensorRuntimeMode.Remote && !string.IsNullOrWhiteSpace(RemoteApiKey))
+            {
+                if (RemoteApiKey.Trim().Length < 32)
+                    throw new ArgumentException("The DeviceHost API key must contain at least 32 characters.");
+                await _sensorModeSettings.SaveApiKeyAsync(RemoteApiKey);
+                RemoteApiKey = string.Empty;
+                HasStoredDeviceHostApiKey = true;
+                apiKeySaved = true;
+            }
             _sensorModeSettings.Save(options);
             StatusMessage = mode == _activeRuntime.Mode &&
                             url == _activeRuntime.DeviceHostBaseAddress &&
                             string.Equals(options.DeviceId, _activeRuntime.DeviceId, StringComparison.Ordinal)
-                ? "Bağlantı ayarları zaten etkin."
-                : "Bağlantı ayarı kaydedildi. Uygulamayı kapatıp yeniden başlatın.";
+                ? apiKeySaved
+                    ? "Connection settings are active; the API key was saved to secure storage."
+                    : "Connection settings are already active."
+                : "Connection settings saved. Restart the app to apply them.";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Bağlantı ayarı geçersiz: {ex.Message}";
+            StatusMessage = $"Invalid connection settings: {ex.Message}";
+        }
+    }
+
+    private bool CanClearDeviceHostApiKey() =>
+        !IsBusy && Status == DeviceStatus.Disconnected && HasStoredDeviceHostApiKey;
+
+    [RelayCommand(CanExecute = nameof(CanClearDeviceHostApiKey))]
+    private void ClearDeviceHostApiKey()
+    {
+        try
+        {
+            _sensorModeSettings.ClearApiKey();
+            RemoteApiKey = string.Empty;
+            HasStoredDeviceHostApiKey = false;
+            StatusMessage = "The stored DeviceHost API key was deleted from secure storage.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"The API key could not be deleted: {ex.Message}";
         }
     }
 
     public async Task InitializeAsync()
     {
+        StartFrameFreshnessTimer();
         if (_historyInitialized) return;
         _historyInitialized = true;
+        await Task.Yield();
+        var databaseInitialization = _databaseInitialization.EnsureInitializedAsync();
+        try
+        {
+            HasStoredDeviceHostApiKey =
+                !string.IsNullOrWhiteSpace(await _sensorModeSettings.GetApiKeyAsync());
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Secure connection credentials could not be read: {ex.Message}";
+        }
+        await databaseInitialization;
+        if (_databaseInitialization.HasFailed)
+        {
+            StatusMessage = "The local history database could not be initialized; saving and history are unavailable.";
+            return;
+        }
         await RefreshHistoryAsync();
     }
 
     public async Task HandleWindowStoppedAsync()
     {
         _snapCts?.Cancel();
-        if (Status is not (DeviceStatus.Capturing or DeviceStatus.Snapping))
+        if (Status is not (DeviceStatus.Grabbing or DeviceStatus.Snapping))
             return;
 
         try
         {
-            await _sensorService.StopCaptureAsync();
-            StatusMessage = "Uygulama arka plana geçti; canlı akış güvenli biçimde durduruldu.";
+            if (Status == DeviceStatus.Snapping)
+                await _sensorService.AbortAsync();
+            else
+                await _sensorService.StopCaptureAsync();
+            StatusMessage = "The app entered the background; acquisition was stopped safely.";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Arka plan geçişinde akış durdurulamadı: {ex.Message}";
+            StatusMessage = $"Acquisition could not be stopped during backgrounding: {ex.Message}";
         }
     }
 
     public async Task HandleWindowDestroyingAsync()
     {
         _snapCts?.Cancel();
+        _renderWorker.Dispose();
+        _frameFreshnessTimer?.Stop();
+        if (_sensorService is IAcquisitionCoordinator coordinator)
+            coordinator.HardwareStateChanged -= OnHardwareStateChanged;
         if (Status == DeviceStatus.Disconnected)
             return;
 
@@ -338,15 +480,15 @@ public partial class MainViewModel : ObservableObject
     private async Task ConnectAsync()
     {
         IsBusy = true;
-        StatusMessage = "Sensör bağlantısı kuruluyor...";
+        StatusMessage = "Connecting to the sensor...";
         try
         {
             await _sensorService.ConnectAsync();
-            StatusMessage = "Sensör bağlı. Parametreler uygulanmaya hazır.";
+            StatusMessage = "Sensor connected. Parameters are ready to apply.";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Bağlantı hatası: {ex.Message}";
+            StatusMessage = $"Connection failed: {ex.Message}";
         }
         finally
         {
@@ -358,16 +500,16 @@ public partial class MainViewModel : ObservableObject
     private async Task DisconnectAsync()
     {
         IsBusy = true;
-        StatusMessage = "Sensör güvenli şekilde ayrılıyor...";
+        StatusMessage = "Disconnecting the sensor safely...";
         _snapCts?.Cancel();
         try
         {
             await _sensorService.DisconnectAsync();
-            StatusMessage = "Bağlantı kesildi. Son görüntü ekranda korunuyor.";
+            StatusMessage = "Sensor disconnected. The latest image remains on screen.";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Bağlantı kesme hatası: {ex.Message}";
+            StatusMessage = $"Disconnect failed: {ex.Message}";
         }
         finally
         {
@@ -379,16 +521,16 @@ public partial class MainViewModel : ObservableObject
     private async Task StartLiveAsync()
     {
         IsBusy = true;
-        StatusMessage = "Canlı Gray16 akışı hazırlanıyor...";
+        StatusMessage = "Preparing the low-resolution Gray16 GRAB stream...";
         try
         {
             ApplyAcquisitionParameters();
             await _sensorService.StartCaptureAsync();
-            StatusMessage = "Canlı akış aktif · latest-frame modu açık.";
+            StatusMessage = "GRAB active · latest-frame mode enabled.";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Canlı akış hatası: {ex.Message}";
+            StatusMessage = $"GRAB could not start: {ex.Message}";
         }
         finally
         {
@@ -399,16 +541,31 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStopLive))]
     private async Task StopLiveAsync()
     {
-        StatusMessage = "Akış durduruluyor...";
-        _snapCts?.Cancel();
+        StatusMessage = "Freezing GRAB...";
         try
         {
             await _sensorService.StopCaptureAsync();
-            StatusMessage = "Akış durduruldu. Son görüntü korunuyor.";
+            StatusMessage = "GRAB frozen. The latest verified image is preserved.";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Akış durdurma hatası: {ex.Message}";
+            StatusMessage = $"GRAB could not be frozen: {ex.Message}";
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanAbort))]
+    private async Task AbortAsync()
+    {
+        StatusMessage = "Routing the active acquisition to safe shutdown...";
+        _snapCts?.Cancel();
+        try
+        {
+            await _sensorService.AbortAsync();
+            StatusMessage = "Acquisition aborted. Device state was verified again.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Abort failed: {ex.Message}";
         }
     }
 
@@ -416,15 +573,20 @@ public partial class MainViewModel : ObservableObject
     private async Task SnapAsync()
     {
         IsBusy = true;
-        StatusMessage = "Yüksek çözünürlüklü snap alınıyor...";
+        StatusMessage = "Preparing a high-resolution SNAP...";
         _snapCts?.Dispose();
         _snapCts = new CancellationTokenSource();
         MobileSnapshotFiles? savedFiles = null;
 
         try
         {
+            await _databaseInitialization.EnsureInitializedAsync();
+            if (!_databaseInitialization.IsReady)
+                throw new InvalidOperationException("Local storage is unavailable; SNAP was not started.");
             ApplyAcquisitionParameters();
-            var measurement = await _snapMeasurement.ExecuteAsync(ExposureTime, _snapCts.Token);
+            var measurement = await _snapMeasurement.ExecuteAsync(
+                new SnapRequest(ExposureTime, SelectedSnapFrameMode),
+                _snapCts.Token);
             if (measurement.Frame is null) return;
 
             AcceptMeasurement(measurement, queueRender: false);
@@ -434,9 +596,7 @@ public partial class MainViewModel : ObservableObject
                 _renderer.RenderToBmp(measurement.Frame, center, width), _snapCts.Token);
             SetCurrentImage(bmpBytes, measurement.Frame.Width, measurement.Frame.Height);
 
-            var measuredPowerW = measurement.Readings.Voltage * measurement.Readings.TubeCurrent;
-            var fileStem = $"Snap_{measurement.Readings.Voltage:F0}kV_{measuredPowerW:F0}W_" +
-                           $"{measurement.Readings.ExposureTime:F0}ms_{DateTime.Now:yyyyMMdd_HHmmss}";
+            var fileStem = AcquisitionFileNameFactory.CreateStem(measurement);
             savedFiles = await Task.Run(
                 () => _imageStorage.SaveSnapshot(bmpBytes, measurement.Frame, fileStem),
                 _snapCts.Token);
@@ -445,18 +605,18 @@ public partial class MainViewModel : ObservableObject
             measurement.SetRawImagePath(savedFiles.RawPath);
             await _saveMeasurement.ExecuteAsync(measurement);
             await RefreshHistoryAsync();
-            StatusMessage = $"Snap kaydedildi ve incelemeye donduruldu · RAW + önizleme · {fileStem}. Canlıya dönerek devam edebilirsiniz.";
+            StatusMessage = $"SNAP saved and frozen for review · RAW + preview · {Path.GetFileNameWithoutExtension(savedFiles.RawPath)}. Select GRAB to continue.";
         }
         catch (OperationCanceledException)
         {
-            StatusMessage = "Çekim kullanıcı veya yaşam döngüsü tarafından iptal edildi.";
+            StatusMessage = "The acquisition was canceled by the user or app lifecycle.";
         }
         catch (Exception ex)
         {
             var preserved = savedFiles is null
                 ? string.Empty
-                : " · RAW ve önizleme diskte korundu; metadata kaydı tamamlanmamış olabilir.";
-            StatusMessage = $"Snap hatası: {ex.Message}{preserved}";
+                : " · RAW and preview files were preserved; the metadata record may be incomplete.";
+            StatusMessage = $"SNAP failed: {ex.Message}{preserved}";
         }
         finally
         {
@@ -469,10 +629,10 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void ResetParameters()
     {
-        Kv = 70;
-        Watt = 3500;
-        ExposureTime = 1000;
-        StatusMessage = "Acquisition parametreleri varsayılan değerlere döndürüldü.";
+        Kv = DefaultVoltageKv;
+        Watt = DefaultPowerW;
+        ExposureTime = DefaultExposureTimeMs;
+        StatusMessage = "Acquisition parameters were reset to defaults.";
     }
 
     [RelayCommand]
@@ -482,7 +642,10 @@ public partial class MainViewModel : ObservableObject
         IsHistoryLoading = true;
         try
         {
-            var items = (await _getHistory.ExecuteAsync())
+            await _databaseInitialization.EnsureInitializedAsync();
+            if (!_databaseInitialization.IsReady)
+                throw new InvalidOperationException("Local history storage is unavailable.");
+            var items = (await _getHistory.ExecuteAsync(maximumCount: 50))
                 .Where(item =>
                     (!string.IsNullOrWhiteSpace(item.RawImagePath) && File.Exists(item.RawImagePath)) ||
                     (!string.IsNullOrWhiteSpace(item.ImagePath) &&
@@ -497,7 +660,7 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Geçmiş yüklenemedi: {ex.Message}";
+            StatusMessage = $"History could not be loaded: {ex.Message}";
         }
         finally
         {
@@ -512,55 +675,59 @@ public partial class MainViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            if (Status is DeviceStatus.Capturing or DeviceStatus.Snapping)
+            if (Status is DeviceStatus.Grabbing or DeviceStatus.Snapping)
             {
-                StatusMessage = "Geçmiş incelemesi için canlı akış durduruluyor...";
+                StatusMessage = "Freezing GRAB before opening history...";
                 _snapCts?.Cancel();
-                await _sensorService.StopCaptureAsync();
+                if (Status == DeviceStatus.Snapping)
+                    await _sensorService.AbortAsync();
+                else
+                    await _sensorService.StopCaptureAsync();
             }
 
-            StatusMessage = "Geçmiş görüntüsü doğrulanıp açılıyor...";
+            StatusMessage = "Verifying and opening the history image...";
             var hasRaw = !string.IsNullOrWhiteSpace(item.RawImagePath) && File.Exists(item.RawImagePath);
             if (hasRaw)
             {
                 var frame = await Task.Run(() => _imageStorage.LoadRaw(item.RawImagePath!));
                 Volatile.Write(ref _currentRawFrame, frame);
                 Interlocked.Increment(ref _renderVersion);
-                Interlocked.Exchange(ref _pendingRender, null);
                 QueueLatestRender(frame);
                 FrameKindDisplay = "HISTORY · RAW";
                 FrameMetadataText = $"{frame.Width} × {frame.Height} · GRAY16";
                 LastFrameTimeText = frame.Timestamp.ToLocalTime().ToString("dd.MM.yyyy · HH:mm:ss");
+                SetLastFrameTimestamp(frame.Timestamp);
             }
             else
             {
                 if (string.IsNullOrWhiteSpace(item.ImagePath) || !File.Exists(item.ImagePath))
-                    throw new FileNotFoundException("Görüntü önizlemesi bulunamadı.", item.ImagePath);
+                    throw new FileNotFoundException("The image preview could not be found.", item.ImagePath);
 
                 var bytes = await Task.Run(() => _imageStorage.LoadBmp(item.ImagePath));
                 Volatile.Write(ref _currentRawFrame, null);
                 Interlocked.Increment(ref _renderVersion);
-                Interlocked.Exchange(ref _pendingRender, null);
                 var (previewWidth, previewHeight) = ReadBmpDimensions(bytes);
                 SetCurrentImage(bytes, previewWidth, previewHeight);
                 FrameKindDisplay = "HISTORY · PREVIEW";
                 FrameMetadataText = "8-BIT BMP · LEGACY";
                 LastFrameTimeText = item.Timestamp.ToString("dd.MM.yyyy · HH:mm:ss");
+                SetLastFrameTimestamp(new DateTimeOffset(item.Timestamp.ToUniversalTime()));
             }
 
             MeasuredPowerW = item.PowerW;
             MeasuredVoltageKv = item.Voltage;
             MeasuredExposureMs = item.ExposureTime;
             MeasuredIntensity = item.XRayIntensity;
+            SetDataSourceStatus(item.IsSimulator, item.SourceMarker);
             AutoWindowLevelCommand.NotifyCanExecuteChanged();
             ResetWindowLevelCommand.NotifyCanExecuteChanged();
             var openedPath = hasRaw ? item.RawImagePath : item.ImagePath;
-            StatusMessage = $"Geçmiş görüntüsü açıldı · {Path.GetFileName(openedPath)}";
+            StatusMessage = $"History image opened · {Path.GetFileName(openedPath)}";
             MainThread.BeginInvokeOnMainThread(() => ReviewImageOpened?.Invoke());
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Geçmiş görüntüsü açılamadı: {ex.Message}";
+            StatusMessage = $"History image could not be opened: {ex.Message}";
         }
         finally
         {
@@ -588,7 +755,7 @@ public partial class MainViewModel : ObservableObject
             Interlocked.Exchange(ref _suppressWindowRender, 0);
         }
         QueueLatestRender(frame);
-        StatusMessage = "Otomatik Window/Level görüntü histogramından hesaplandı.";
+        StatusMessage = "Automatic Window/Level was calculated from the image histogram.";
     }
 
     [RelayCommand(CanExecute = nameof(CanAdjustImage))]
@@ -608,7 +775,7 @@ public partial class MainViewModel : ObservableObject
             Interlocked.Exchange(ref _suppressWindowRender, 0);
         }
         QueueLatestRender(frame);
-        StatusMessage = "Window/Level tam Gray16 aralığına sıfırlandı.";
+        StatusMessage = "Window/Level was reset to the full Gray16 range.";
     }
 
     private void AcceptMeasurement(XRayMeasurement measurement, bool queueRender)
@@ -623,14 +790,95 @@ public partial class MainViewModel : ObservableObject
             MeasuredVoltageKv = measurement.Readings.Voltage;
             MeasuredExposureMs = measurement.Readings.ExposureTime;
             MeasuredIntensity = measurement.Readings.XRayIntensity;
-            FrameKindDisplay = frame.Kind == FrameKind.LivePreview ? "LIVE PREVIEW" : "SNAP · FROZEN";
+            SetDataSourceStatus(measurement.IsSimulator, measurement.SourceMarker);
+            FrameKindDisplay = frame.Kind == FrameKind.GrabPreview ? "GRAB PREVIEW" : "SNAP · FROZEN";
             FrameMetadataText = $"{frame.Width} × {frame.Height} · GRAY16";
             LastFrameTimeText = frame.Timestamp.ToLocalTime().ToString("dd.MM.yyyy · HH:mm:ss.fff");
+            SetLastFrameTimestamp(frame.Timestamp);
             AutoWindowLevelCommand.NotifyCanExecuteChanged();
             ResetWindowLevelCommand.NotifyCanExecuteChanged();
         });
 
         if (queueRender) QueueLatestRender(frame);
+    }
+
+    private void SetDataSourceStatus(bool isSimulator, string? sourceMarker)
+    {
+        switch (DataSourceTrustClassifier.Classify(isSimulator, sourceMarker))
+        {
+            case DataSourceTrust.Simulation:
+                DataSourceStatusText = "DATA SOURCE: SIMULATION / TEST · NOT FOR CLINICAL USE";
+                DataSourceStatusColor = "#FFB020";
+                break;
+            case DataSourceTrust.Device:
+                DataSourceStatusText = "DATA SOURCE: PHYSICAL DEVICE";
+                DataSourceStatusColor = "#32D74B";
+                break;
+            default:
+                DataSourceStatusText = "DATA SOURCE: UNVERIFIED";
+                DataSourceStatusColor = "#667991";
+                break;
+        }
+    }
+
+    private void OnHardwareStateChanged(AcquisitionHardwareState state)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            HasVerifiedHardwareState = state.IsVerified;
+            IsXRayActive = state.IsVerified && state.XRayActive;
+            if (!state.IsVerified)
+            {
+                GeneratorHardwareStateText = "GENERATOR UNVERIFIED";
+                DetectorHardwareStateText = "DETECTOR UNVERIFIED";
+                AcquisitionCoordinatorStateText = "STALE / DISCONNECTED";
+                return;
+            }
+            GeneratorHardwareStateText = state.GeneratorConnected ? "GENERATOR CONNECTED" : "GENERATOR OFFLINE";
+            DetectorHardwareStateText = state.DetectorConnected
+                ? state.DetectorAcquiring ? "DETECTOR ACQUIRING" : "DETECTOR READY"
+                : "DETECTOR OFFLINE";
+            AcquisitionCoordinatorStateText = state.CoordinatorState.ToString().ToUpperInvariant();
+        });
+    }
+
+    private void StartFrameFreshnessTimer()
+    {
+        if (_frameFreshnessTimer is not null ||
+            Microsoft.Maui.Controls.Application.Current?.Dispatcher is not { } dispatcher)
+            return;
+        _frameFreshnessTimer = dispatcher.CreateTimer();
+        _frameFreshnessTimer.Interval = TimeSpan.FromSeconds(1);
+        _frameFreshnessTimer.Tick += (_, _) => UpdateFrameFreshness();
+        _frameFreshnessTimer.Start();
+        UpdateFrameFreshness();
+    }
+
+    private void SetLastFrameTimestamp(DateTimeOffset timestamp)
+    {
+        Interlocked.Exchange(ref _lastFrameUtcTicks, timestamp.UtcDateTime.Ticks);
+        UpdateFrameFreshness();
+    }
+
+    private void UpdateFrameFreshness()
+    {
+        var ticks = Interlocked.Read(ref _lastFrameUtcTicks);
+        var capturedAt = ticks == 0
+            ? (DateTimeOffset?)null
+            : new DateTimeOffset(new DateTime(ticks, DateTimeKind.Utc));
+        var result = FrameFreshnessEvaluator.Evaluate(
+            capturedAt,
+            DateTimeOffset.UtcNow,
+            staleAfter: TimeSpan.FromSeconds(5),
+            maximumFutureClockSkew: TimeSpan.FromSeconds(2));
+        var ageSeconds = Math.Max(0, (int)Math.Floor(result.Age.TotalSeconds));
+        (FrameFreshnessText, FrameFreshnessColor) = result.State switch
+        {
+            FrameFreshnessState.Fresh => ($"LATEST FRAME · {ageSeconds} s", "#32D74B"),
+            FrameFreshnessState.Stale => ($"STALE · {ageSeconds} s", "#FFB020"),
+            FrameFreshnessState.FutureClockSkew => ("FRAME CLOCK MISMATCH", "#FF4D5E"),
+            _ => ("NO FRAME", "#667991")
+        };
     }
 
     private void QueueCurrentFrameForRender()
@@ -647,55 +895,41 @@ public partial class MainViewModel : ObservableObject
             (int)Math.Round(WindowCenter),
             Math.Max(1, (int)Math.Round(WindowWidth)),
             Interlocked.Increment(ref _renderVersion));
-        Interlocked.Exchange(ref _pendingRender, request);
-        StartRenderWorkerIfNeeded();
+        _renderWorker.TryPost(request);
     }
 
-    private void StartRenderWorkerIfNeeded()
+    private ValueTask ProcessRenderRequest(RenderRequest request, CancellationToken cancellationToken)
     {
-        if (Interlocked.CompareExchange(ref _renderWorkerRunning, 1, 0) != 0) return;
-        _ = Task.Run(DrainRenderQueueAsync);
+        cancellationToken.ThrowIfCancellationRequested();
+        var bmpBytes = _renderer.RenderToBmp(request.Frame, request.Center, request.Width);
+        cancellationToken.ThrowIfCancellationRequested();
+        // Render sırasında daha yeni bir istek geldiyse eski sonucu UI'a gönderme.
+        if (request.Version == Volatile.Read(ref _renderVersion) &&
+            ReferenceEquals(request.Frame, Volatile.Read(ref _currentRawFrame)))
+            SetCurrentImage(bmpBytes, request.Frame.Width, request.Frame.Height);
+        return ValueTask.CompletedTask;
     }
 
-    private async Task DrainRenderQueueAsync()
+    private void ReportRenderFailure(RenderRequest request, Exception exception)
     {
-        try
-        {
-            while (Interlocked.Exchange(ref _pendingRender, null) is { } request)
-            {
-                try
-                {
-                    var bmpBytes = _renderer.RenderToBmp(request.Frame, request.Center, request.Width);
-                    // Render sırasında daha yeni bir istek geldiyse eski sonucu UI'a gönderme.
-                    if (request.Version == Volatile.Read(ref _renderVersion) &&
-                        ReferenceEquals(request.Frame, Volatile.Read(ref _currentRawFrame)))
-                        SetCurrentImage(bmpBytes, request.Frame.Width, request.Frame.Height);
-                }
-                catch (Exception ex)
-                {
-                    if (Volatile.Read(ref _pendingRender) is null)
-                        MainThread.BeginInvokeOnMainThread(() => StatusMessage = $"Görüntü render hatası: {ex.Message}");
-                }
-
-                await Task.Yield();
-            }
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _renderWorkerRunning, 0);
-            if (Volatile.Read(ref _pendingRender) is not null)
-                StartRenderWorkerIfNeeded();
-        }
+        if (request.Version != Volatile.Read(ref _renderVersion) ||
+            !ReferenceEquals(request.Frame, Volatile.Read(ref _currentRawFrame)))
+            return;
+        MainThread.BeginInvokeOnMainThread(() =>
+            StatusMessage = $"Image rendering failed: {exception.Message}");
     }
 
     private void SetCurrentImage(byte[] bmpBytes, int width, int height)
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
+#if !ANDROID
             CurrentImage = ImageSource.FromStream(() => new MemoryStream(bmpBytes, writable: false));
+#endif
             CurrentFrameWidth = Math.Max(0, width);
             CurrentFrameHeight = Math.Max(0, height);
             HasCurrentImage = true;
+            PresentationFrameReady?.Invoke(bmpBytes, CurrentFrameWidth, CurrentFrameHeight);
         });
     }
 

@@ -8,6 +8,7 @@ public sealed class MobileSensorModeSettings
     private const string ModeKey = "sensor.runtime.mode";
     private const string UrlKey = "sensor.runtime.url";
     private const string DeviceIdKey = "sensor.runtime.deviceId";
+    private const string ApiKeySecureStorageKey = "sensor.runtime.deviceHostApiKey";
 
     public SensorRuntimeOptions Load(Uri defaultRemoteAddress)
     {
@@ -46,4 +47,25 @@ public sealed class MobileSensorModeSettings
         Preferences.Default.Set(UrlKey, options.DeviceHostBaseAddress.AbsoluteUri);
         Preferences.Default.Set(DeviceIdKey, options.DeviceId);
     }
+
+    public async Task<string?> GetApiKeyAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var apiKey = await SecureStorage.Default
+            .GetAsync(ApiKeySecureStorageKey)
+            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return string.IsNullOrWhiteSpace(apiKey) ? null : apiKey;
+    }
+
+    public async Task SaveApiKeyAsync(string apiKey)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey) || apiKey.Trim().Length < 32)
+            throw new ArgumentException("The DeviceHost API key must contain at least 32 characters.", nameof(apiKey));
+        await SecureStorage.Default
+            .SetAsync(ApiKeySecureStorageKey, apiKey.Trim())
+            .ConfigureAwait(false);
+    }
+
+    public void ClearApiKey() => SecureStorage.Default.Remove(ApiKeySecureStorageKey);
 }

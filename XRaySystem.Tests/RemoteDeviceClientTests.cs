@@ -44,12 +44,115 @@ public sealed class RemoteDeviceClientTests
     }
 
     [Fact]
+    public async Task Grab_freeze_abort_and_snap_mode_use_the_new_protocol_routes()
+    {
+        var requests = new List<(string Path, string Body)>();
+        var handler = new StubHandler(async (request, cancellationToken) =>
+        {
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            requests.Add((request.RequestUri!.AbsolutePath, body));
+            var commandId = JsonDocument.Parse(body).RootElement.GetProperty("commandId").GetGuid();
+            if (request.RequestUri.AbsolutePath.EndsWith("/snap", StringComparison.Ordinal))
+            {
+                var image = new RemoteImageMetadataContract(
+                    Guid.NewGuid(),
+                    Guid.NewGuid(),
+                    "Snap",
+                    2,
+                    2,
+                    4,
+                    "Gray16LittleEndian",
+                    2,
+                    2,
+                    DateTimeOffset.UtcNow,
+                    "IndustrialQaPhantom",
+                    new AcquisitionParametersContract(70, 3500, 10),
+                    new MeasuredTelemetryContract(70, 50, 3500, 1, 10),
+                    true,
+                    true,
+                    AcquisitionOperationContract.Snap,
+                    SnapFrameModeContract.Low);
+                return JsonResponse(new SnapCommandResult(commandId, true, "ok", CreateState(), image));
+            }
+
+            return JsonResponse(new DeviceCommandResult(commandId, true, "ok", CreateState()));
+        });
+        using var httpClient = new HttpClient(handler);
+        await using var client = new RemoteDeviceClient(
+            httpClient,
+            new RemoteDeviceClientOptions(new Uri("http://localhost:5088"), "mock-01"));
+
+        await client.StartGrabAsync();
+        await client.FreezeGrabAsync();
+        await client.AbortAsync();
+        var snap = await client.SnapAsync(SnapFrameModeContract.Low);
+
+        Assert.Equal(
+            [
+                "/api/devices/mock-01/grab/start",
+                "/api/devices/mock-01/grab/freeze",
+                "/api/devices/mock-01/abort",
+                "/api/devices/mock-01/snap"
+            ],
+            requests.Select(item => item.Path));
+        Assert.Contains("\"frameMode\":\"Low\"", requests[^1].Body);
+        Assert.Equal(SnapFrameModeContract.Low, snap.Image.SnapFrameMode);
+    }
+
+    [Fact]
+    public async Task Dynamic_mobile_credential_is_added_as_bearer_without_persisting_on_http_client()
+    {
+        const string key = "mobile-test-key-with-at-least-32-characters";
+        var handler = new StubHandler((request, _) =>
+        {
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            Assert.Equal(key, request.Headers.Authorization?.Parameter);
+            return Task.FromResult(JsonResponse(CreateState()));
+        });
+        using var httpClient = new HttpClient(handler);
+        await using var client = new RemoteDeviceClient(
+            httpClient,
+            new RemoteDeviceClientOptions(
+                new Uri("https://device-host.local:7088"),
+                "mock-01",
+                ApiKeyProvider: _ => Task.FromResult<string?>(key)));
+
+        var state = await client.GetStateAsync();
+
+        Assert.Equal("mock-01", state.DeviceId);
+        Assert.Null(httpClient.DefaultRequestHeaders.Authorization);
+    }
+
+    [Fact]
+    public async Task Protocol_validation_accepts_required_capabilities_and_rejects_wrong_version()
+    {
+        var version = DeviceProtocolVersion.Current;
+        var handler = new StubHandler((_, _) => Task.FromResult(JsonResponse(
+            new DeviceProtocolContract(
+                version,
+                "XRaySystem.DeviceHost",
+                "mock-01",
+                true,
+                ["Snap", "Grab", "Freeze", "Abort"],
+                ["Raw", "Low"]))));
+        using var httpClient = new HttpClient(handler);
+        await using var client = new RemoteDeviceClient(
+            httpClient,
+            new RemoteDeviceClientOptions(new Uri("http://localhost:5088"), "mock-01"));
+
+        await client.ValidateProtocolAsync();
+        version = DeviceProtocolVersion.Current + 1;
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.ValidateProtocolAsync());
+    }
+
+    [Fact]
     public async Task Binary_and_latest_live_downloads_validate_content_types_and_sequence()
     {
         var handler = new StubHandler((request, _) =>
         {
             var path = request.RequestUri!.PathAndQuery;
-            if (path.Contains("live/latest", StringComparison.Ordinal))
+            if (path.Contains("grab/latest", StringComparison.Ordinal))
             {
                 var response = BytesResponse([1, 2, 3], "image/bmp");
                 response.Headers.Add("X-XRay-Sequence", "42");
@@ -96,6 +199,50 @@ public sealed class RemoteDeviceClientTests
         var frame = await client.GetLatestLiveFrameAsync(CreateTelemetry(sequence: 1));
 
         Assert.Null(frame);
+    }
+
+    [Fact]
+    public async Task Problem_details_are_exposed_as_bounded_structured_remote_errors()
+    {
+        var handler = new StubHandler((_, _) => Task.FromResult(new HttpResponseMessage((HttpStatusCode)507)
+        {
+            Content = JsonContent.Create(new
+            {
+                title = "Storage failure",
+                status = 507,
+                detail = "Görüntü cihaz bilgisayarında kalıcı olarak doğrulanamadı.",
+                error = "persistence_failed"
+            })
+        }));
+        using var httpClient = new HttpClient(handler);
+        await using var client = new RemoteDeviceClient(
+            httpClient,
+            new RemoteDeviceClientOptions(new Uri("http://localhost:5088/"), "mock-01"));
+
+        var error = await Assert.ThrowsAsync<RemoteDeviceException>(() =>
+            client.ConnectDeviceAsync());
+
+        Assert.Equal((HttpStatusCode)507, error.StatusCode);
+        Assert.Equal("persistence_failed", error.ErrorCode);
+        Assert.Equal("Görüntü cihaz bilgisayarında kalıcı olarak doğrulanamadı.", error.Message);
+    }
+
+    [Fact]
+    public async Task Non_json_proxy_errors_use_safe_status_fallback_without_echoing_body()
+    {
+        var handler = new StubHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadGateway)
+        {
+            Content = new StringContent("proxy-internal-secret-details")
+        }));
+        using var httpClient = new HttpClient(handler);
+        await using var client = new RemoteDeviceClient(
+            httpClient,
+            new RemoteDeviceClientOptions(new Uri("http://localhost:5088/"), "mock-01"));
+
+        var error = await Assert.ThrowsAsync<RemoteDeviceException>(() => client.GetStateAsync());
+
+        Assert.Equal("remote_request_failed", error.ErrorCode);
+        Assert.DoesNotContain("secret", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private static DeviceStateContract CreateState() => new(

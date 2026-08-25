@@ -23,6 +23,16 @@ public class ProcessTelemetryUseCase
             Frame = measurement.Frame,
             Profile = measurement.Profile,
             IsSimulator = measurement.IsSimulator,
+            RequestedParameters = measurement.RequestedParameters,
+            AcquisitionId = measurement.AcquisitionId,
+            Operation = measurement.Operation,
+            SnapFrameMode = measurement.SnapFrameMode,
+            SourceWidth = measurement.SourceWidth,
+            SourceHeight = measurement.SourceHeight,
+            SourceMarker = measurement.SourceMarker,
+            VoltageProvenance = measurement.Readings.VoltageProvenance,
+            TubeCurrentProvenance = measurement.Readings.TubeCurrentProvenance,
+            ExposureTimeProvenance = measurement.Readings.ExposureTimeProvenance,
             ImagePath = measurement.ImagePath,
             RawImagePath = measurement.RawImagePath
         };

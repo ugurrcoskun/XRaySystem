@@ -50,25 +50,7 @@
                 </Border>
             </Grid>
 
-            <Border Style="{StaticResource SoftCardStyle}"
-                    Stroke="{Binding StatusAccentColor}">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                    <VerticalStackLayout Spacing="2" VerticalOptions="Center">
-                        <Label Text="SİSTEM DURUMU" Style="{StaticResource CaptionLabelStyle}" />
-                        <Label Text="{Binding StatusMessage}"
-                               TextColor="{StaticResource TextSecondary}"
-                               FontSize="12"
-                               LineBreakMode="TailTruncation" />
-                    </VerticalStackLayout>
-                    <ActivityIndicator Grid.Column="1"
-                                       IsRunning="{Binding IsBusy}"
-                                       IsVisible="{Binding IsBusy}"
-                                       WidthRequest="24"
-                                       HeightRequest="24" />
-                </Grid>
-            </Border>
-
-            <!-- Telefonda dikey, tablet/desktop genişliğinde iki kolon -->
+            <!-- Acquisition iş akışı her ekran genişliğinde aynı dikey sırayı korur. -->
             <Grid x:Name="Workspace"
                   RowDefinitions="Auto,Auto"
                   ColumnDefinitions="*"
@@ -76,13 +58,19 @@
                   ColumnSpacing="16">
 
                 <!-- Görüntüleyici -->
-                <VerticalStackLayout x:Name="ViewerPanel" Grid.Row="0" Spacing="12">
+                <VerticalStackLayout x:Name="ViewerPanel" Grid.Row="1" Spacing="12">
                     <Border Style="{StaticResource CardStyle}" Padding="12">
                         <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="10">
                             <Grid ColumnDefinitions="*,Auto" Padding="4,2">
                                 <VerticalStackLayout Spacing="2">
-                                    <Label Text="LIVE X-RAY MATRIX" Style="{StaticResource EyebrowLabelStyle}" />
-                                    <Label Text="Gray16 görüntü alanı" Style="{StaticResource SectionTitleStyle}" />
+                                    <Label Text="GRAB X-RAY MATRIX" Style="{StaticResource EyebrowLabelStyle}" />
+                                    <Label Text="Gray16 image viewer" Style="{StaticResource SectionTitleStyle}" />
+                                    <Label Text="{Binding DataSourceStatusText}"
+                                           TextColor="{Binding DataSourceStatusColor}"
+                                           AutomationId="DataSourceStatusLabel"
+                                           SemanticProperties.Description="Verified data source for the displayed image"
+                                           FontFamily="OpenSansSemibold"
+                                           FontSize="9" />
                                 </VerticalStackLayout>
                                 <Border Grid.Column="1"
                                         Padding="10,6"
@@ -125,7 +113,7 @@
                                     <Image x:Name="SensorImage"
                                            Source="{Binding CurrentImage}"
                                            AutomationId="SensorImage"
-                                           SemanticProperties.Description="Canlı veya kaydedilmiş X-ray sensör görüntüsü"
+                                           SemanticProperties.Description="GRAB, SNAP, or saved X-ray sensor image"
                                            Aspect="AspectFit"
                                            IsVisible="{Binding HasCurrentImage}">
                                         <Image.GestureRecognizers>
@@ -153,10 +141,10 @@
                                                    HorizontalOptions="Center"
                                                    VerticalOptions="Center" />
                                         </Border>
-                                        <Label Text="SENSÖR GÖRÜNTÜSÜ BEKLENİYOR"
+                                        <Label Text="WAITING FOR SENSOR IMAGE"
                                                Style="{StaticResource EyebrowLabelStyle}"
                                                HorizontalTextAlignment="Center" />
-                                        <Label Text="Cihaza bağlanın ve canlı akışı başlatın"
+                                        <Label Text="Connect to the device and start GRAB"
                                                TextColor="{StaticResource TextMuted}"
                                                FontSize="12"
                                                HorizontalTextAlignment="Center" />
@@ -190,7 +178,7 @@
                                       ColumnSpacing="6">
                                     <Button Text="−"
                                             AutomationId="ZoomOutButton"
-                                            SemanticProperties.Description="Görüntüyü uzaklaştır"
+                                            SemanticProperties.Description="Zoom out"
                                             Clicked="OnZoomOutClicked"
                                             WidthRequest="42"
                                             HeightRequest="40"
@@ -208,24 +196,24 @@
                                     <Button Grid.Column="2"
                                             Text="+"
                                             AutomationId="ZoomInButton"
-                                            SemanticProperties.Description="Görüntüyü yakınlaştır"
+                                            SemanticProperties.Description="Zoom in"
                                             Clicked="OnZoomInClicked"
                                             WidthRequest="42"
                                             HeightRequest="40"
                                             Padding="0"
                                             FontSize="16" />
                                     <Button Grid.Column="3"
-                                            Text="TAM EKRAN"
+                                            Text="FULL SCREEN"
                                             AutomationId="OpenFullScreenViewerButton"
-                                            SemanticProperties.Description="Görüntüyü tam ekran incele"
+                                            SemanticProperties.Description="Review the image in full screen"
                                             Clicked="OnOpenFullScreenClicked"
                                             HeightRequest="40"
                                             Padding="10,0"
                                             FontSize="9" />
                                     <Button Grid.Column="4"
-                                            Text="SIFIRLA"
+                                            Text="RESET"
                                             AutomationId="ResetZoomButton"
-                                            SemanticProperties.Description="Yakınlaştırma ve görüntü konumunu sıfırla"
+                                            SemanticProperties.Description="Reset image zoom and position"
                                             Clicked="OnResetZoomClicked"
                                             HeightRequest="40"
                                             Padding="10,0"
@@ -234,10 +222,17 @@
                             </Border>
 
                             <Grid Grid.Row="3" ColumnDefinitions="*,Auto" Padding="4,0">
-                                <Label Text="{Binding LastFrameTimeText}"
-                                       TextColor="{StaticResource TextMuted}"
-                                       FontSize="10"
-                                       VerticalOptions="Center" />
+                                <VerticalStackLayout Spacing="1">
+                                    <Label Text="{Binding LastFrameTimeText}"
+                                           TextColor="{StaticResource TextMuted}"
+                                           FontSize="10" />
+                                    <Label Text="{Binding FrameFreshnessText}"
+                                           AutomationId="FrameFreshnessLabel"
+                                           SemanticProperties.Description="Age and freshness state of the latest verified image"
+                                           TextColor="{Binding FrameFreshnessColor}"
+                                           FontFamily="OpenSansSemibold"
+                                           FontSize="10" />
+                                </VerticalStackLayout>
                                 <Label Grid.Column="1"
                                        Text="16-BIT · LOSSLESS SOURCE"
                                        Style="{StaticResource CaptionLabelStyle}"
@@ -252,7 +247,7 @@
                             <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
                                 <VerticalStackLayout Spacing="1">
                                     <Label Text="WINDOW / LEVEL" Style="{StaticResource EyebrowLabelStyle}" />
-                                    <Label Text="Görüntü kontrastı" Style="{StaticResource SectionTitleStyle}" />
+                                    <Label Text="Image contrast" Style="{StaticResource SectionTitleStyle}" />
                                 </VerticalStackLayout>
                                 <Button Grid.Column="1" Text="AUTO"
                                         Command="{Binding AutoWindowLevelCommand}"
@@ -279,17 +274,71 @@
                     </Border>
                 </VerticalStackLayout>
 
-                <!-- Cihaz ve acquisition kontrolleri -->
-                <VerticalStackLayout x:Name="ControlPanel" Grid.Row="1" Spacing="12">
-                    <Border Style="{StaticResource CardStyle}">
+                <!-- Önce parametreler, ardından cihaz bağlantısı ve acquisition komutları. -->
+                <Grid x:Name="ControlPanel"
+                      Grid.Row="0"
+                      RowDefinitions="Auto,Auto"
+                      RowSpacing="12">
+                    <Border Grid.Row="1" Style="{StaticResource CardStyle}">
                         <VerticalStackLayout Spacing="13">
                             <VerticalStackLayout Spacing="2">
                                 <Label Text="DEVICE LINK" Style="{StaticResource EyebrowLabelStyle}" />
-                                <Label Text="Cihaz kontrolü" Style="{StaticResource SectionTitleStyle}" />
+                                <Label Text="Device control" Style="{StaticResource SectionTitleStyle}" />
                             </VerticalStackLayout>
 
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <VerticalStackLayout Spacing="2" VerticalOptions="Center">
+                                    <Label Text="SYSTEM STATUS" Style="{StaticResource CaptionLabelStyle}" />
+                                    <Label Text="{Binding StatusMessage}"
+                                           TextColor="{StaticResource TextSecondary}"
+                                           FontSize="12"
+                                           LineBreakMode="TailTruncation" />
+                                </VerticalStackLayout>
+                                <ActivityIndicator Grid.Column="1"
+                                                   IsRunning="{Binding IsBusy}"
+                                                   IsVisible="{Binding IsBusy}"
+                                                   WidthRequest="24"
+                                                   HeightRequest="24" />
+                            </Grid>
+
+                            <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                                <VerticalStackLayout Spacing="2">
+                                    <Label Text="RADIATION" Style="{StaticResource CaptionLabelStyle}" />
+                                    <Label Text="{Binding XRayHardwareStateText}"
+                                           AutomationId="VerifiedXRayStateLabel"
+                                           SemanticProperties.Description="X-ray state verified by the generator"
+                                           TextColor="{Binding XRayHardwareStateColor}"
+                                           FontFamily="OpenSansSemibold"
+                                           FontSize="10" />
+                                </VerticalStackLayout>
+                                <VerticalStackLayout Grid.Column="1" Spacing="2">
+                                    <Label Text="HARDWARE" Style="{StaticResource CaptionLabelStyle}" />
+                                    <Label Text="{Binding GeneratorHardwareStateText}"
+                                           AutomationId="GeneratorHardwareStateLabel"
+                                           FontSize="10"
+                                           LineBreakMode="TailTruncation" />
+                                    <Label Text="{Binding DetectorHardwareStateText}"
+                                           AutomationId="DetectorHardwareStateLabel"
+                                           FontSize="10"
+                                           TextColor="{StaticResource TextSecondary}"
+                                           LineBreakMode="TailTruncation" />
+                                </VerticalStackLayout>
+                                <VerticalStackLayout Grid.Column="2" Spacing="2">
+                                    <Label Text="PHASE" Style="{StaticResource CaptionLabelStyle}" />
+                                    <Label Text="{Binding AcquisitionCoordinatorStateText}"
+                                           AutomationId="AcquisitionCoordinatorStateLabel"
+                                           FontSize="10"
+                                           TextColor="{StaticResource TextSecondary}"
+                                           LineBreakMode="TailTruncation" />
+                                </VerticalStackLayout>
+                            </Grid>
+
+                            <BoxView HeightRequest="1"
+                                     Color="{StaticResource Stroke}"
+                                     Margin="0,2" />
+
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                <Label Text="ÇALIŞMA MODU"
+                                <Label Text="OPERATING MODE"
                                        Style="{StaticResource CaptionLabelStyle}"
                                        VerticalOptions="Center" />
                                 <Label Grid.Column="1"
@@ -306,12 +355,12 @@
                                 <Picker ItemsSource="{Binding ConnectionModeOptions}"
                                         SelectedIndex="{Binding SelectedConnectionModeIndex}"
                                         AutomationId="ConnectionModePicker"
-                                        SemanticProperties.Description="Yerel mock veya uzak DeviceHost çalışma modu" />
+                                        SemanticProperties.Description="Local mock or remote DeviceHost operating mode" />
                             </Border>
 
                             <VerticalStackLayout Spacing="8"
                                                  IsVisible="{Binding IsRemoteConnectionMode}">
-                                <Label Text="DEVICEHOST ADRESİ"
+                                <Label Text="DEVICEHOST ADDRESS"
                                        Style="{StaticResource CaptionLabelStyle}" />
                                 <Border Padding="10,0"
                                         BackgroundColor="{StaticResource FieldBackground}"
@@ -320,9 +369,9 @@
                                     <Entry Text="{Binding DeviceHostUrl}"
                                            Keyboard="Url"
                                            AutomationId="DeviceHostUrlEntry"
-                                           SemanticProperties.Description="DeviceHost HTTP veya HTTPS adresi" />
+                                           SemanticProperties.Description="DeviceHost HTTP or HTTPS address" />
                                 </Border>
-                                <Label Text="CİHAZ KİMLİĞİ"
+                                <Label Text="DEVICE ID"
                                        Style="{StaticResource CaptionLabelStyle}" />
                                 <Border Padding="10,0"
                                         BackgroundColor="{StaticResource FieldBackground}"
@@ -330,99 +379,166 @@
                                         StrokeShape="RoundRectangle 11">
                                     <Entry Text="{Binding RemoteDeviceId}"
                                            AutomationId="RemoteDeviceIdEntry"
-                                           SemanticProperties.Description="Bağlanılacak uzak cihaz kimliği" />
+                                           SemanticProperties.Description="Remote device identifier" />
                                 </Border>
+                                <Label Text="DEVICEHOST API KEY"
+                                       Style="{StaticResource CaptionLabelStyle}" />
+                                <Border Padding="10,0"
+                                        BackgroundColor="{StaticResource FieldBackground}"
+                                        Stroke="{StaticResource Stroke}"
+                                        StrokeShape="RoundRectangle 11">
+                                    <Entry Text="{Binding RemoteApiKey}"
+                                           IsPassword="True"
+                                           Placeholder="Leave blank to keep the stored key"
+                                           AutomationId="DeviceHostApiKeyEntry"
+                                           SemanticProperties.Description="DeviceHost operator API key" />
+                                </Border>
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                    <Label Text="{Binding DeviceHostCredentialStatusText}"
+                                           TextColor="{StaticResource TextMuted}"
+                                           FontSize="11"
+                                           VerticalOptions="Center" />
+                                    <Button Grid.Column="1"
+                                            Text="DELETE KEY"
+                                            AutomationId="ClearDeviceHostApiKeyButton"
+                                            SemanticProperties.Hint="Deletes the stored DeviceHost API key from secure storage"
+                                            Command="{Binding ClearDeviceHostApiKeyCommand}" />
+                                </Grid>
                             </VerticalStackLayout>
 
-                            <Button Text="BAĞLANTI AYARINI KAYDET"
+                            <Button Text="SAVE CONNECTION SETTINGS"
                                     AutomationId="SaveConnectionSettingsButton"
-                                    SemanticProperties.Hint="Seçilen çalışma modunu sonraki uygulama başlangıcı için kaydeder"
+                                    SemanticProperties.Hint="Saves the selected operating mode for the next app launch"
                                     Command="{Binding ApplyConnectionSettingsCommand}" />
 
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="9">
-                                <Button Text="BAĞLAN"
+                                <Button Text="CONNECT"
                                         AutomationId="ConnectButton"
-                                        SemanticProperties.Hint="Seçili X-ray sensör servisine bağlanır"
+                                        SemanticProperties.Hint="Connects to the selected X-ray sensor service"
                                         Command="{Binding ConnectCommand}"
                                         Style="{StaticResource PrimaryActionButton}" />
-                                <Button Grid.Column="1" Text="BAĞLANTIYI KES"
+                                <Button Grid.Column="1" Text="DISCONNECT"
                                         AutomationId="DisconnectButton"
-                                        SemanticProperties.Hint="Aktif sensör bağlantısını güvenli şekilde kapatır"
+                                        SemanticProperties.Hint="Safely closes the active sensor connection"
                                         Command="{Binding DisconnectCommand}"
                                         Style="{StaticResource DangerActionButton}" />
                             </Grid>
 
+                            <BoxView HeightRequest="1"
+                                     Color="{StaticResource Stroke}"
+                                     Margin="0,2" />
+
+                            <VerticalStackLayout Spacing="2">
+                                <Label Text="ACQUISITION COMMANDS" Style="{StaticResource EyebrowLabelStyle}" />
+                                <Label Text="Device operations" Style="{StaticResource SectionTitleStyle}" />
+                            </VerticalStackLayout>
+
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="9">
                                 <Button Text="{Binding StartLiveActionText}"
                                         AutomationId="StartLiveButton"
-                                        SemanticProperties.Description="Canlı görüntü akışını başlat"
+                                        SemanticProperties.Description="Start the low-resolution GRAB image stream"
                                         Command="{Binding StartLiveCommand}"
                                         Style="{StaticResource SuccessActionButton}" />
-                                <Button Grid.Column="1" Text="■  DURDUR"
+                                <Button Grid.Column="1" Text="FREEZE"
                                         AutomationId="StopLiveButton"
-                                        SemanticProperties.Description="Canlı akışı veya çekimi durdur"
+                                        SemanticProperties.Description="Freeze the active GRAB stream and preserve the latest image"
                                         Command="{Binding StopLiveCommand}"
-                                        Style="{StaticResource DangerActionButton}" />
+                                        Style="{StaticResource BaseButtonStyle}" />
                             </Grid>
 
-                            <Button Text="●  SNAP ÇEK"
+                            <Button Text="{Binding SnapActionText}"
                                     AutomationId="SnapButton"
-                                    SemanticProperties.Hint="Girilen kV, Watt ve pozlama süresiyle yüksek çözünürlüklü görüntü alır"
+                                    SemanticProperties.Hint="Acquire one image in the selected LOW or RAW detector mode"
                                     Command="{Binding SnapCommand}"
                                     Style="{StaticResource SnapActionButton}" />
+
+                            <VerticalStackLayout Spacing="5">
+                                <Button Text="STOP"
+                                        AutomationId="AbortButton"
+                                        SemanticProperties.Description="Immediately route the active GRAB or SNAP operation to safe shutdown"
+                                        SemanticProperties.Hint="This software command does not replace the equipment hardware emergency stop"
+                                        Command="{Binding AbortCommand}"
+                                        Style="{StaticResource AbortAcquisitionButton}" />
+                                <Label Text="·Immediate safe shutdown for an active GRAB or SNAP."
+                                       TextColor="{StaticResource Danger}"
+                                       FontSize="10"
+                                       HorizontalTextAlignment="Center" />
+                            </VerticalStackLayout>
+
                         </VerticalStackLayout>
                     </Border>
 
-                    <Border Style="{StaticResource CardStyle}">
+                    <Border Grid.Row="0" Style="{StaticResource CardStyle}">
                         <VerticalStackLayout Spacing="13">
                             <Grid ColumnDefinitions="*,Auto">
                                 <VerticalStackLayout Spacing="2">
-                                    <Label Text="ACQUISITION" Style="{StaticResource EyebrowLabelStyle}" />
-                                    <Label Text="Tüp parametreleri" Style="{StaticResource SectionTitleStyle}" />
+                                    <Label Text="PARAMETERS" Style="{StaticResource EyebrowLabelStyle}" />
+                                    <Label Text="Acquisition parameters" Style="{StaticResource SectionTitleStyle}" />
                                 </VerticalStackLayout>
-                                <Button Grid.Column="1" Text="VARSAYILAN"
+                                <Button Grid.Column="1" Text="DEFAULTS"
                                         Command="{Binding ResetParametersCommand}"
                                         Padding="10,6" MinimumHeightRequest="36" FontSize="9" />
                             </Grid>
 
+                            <Label Text="X-RAY GENERATOR"
+                                   Style="{StaticResource EyebrowLabelStyle}" />
+
                             <Grid ColumnDefinitions="*,*" ColumnSpacing="9">
                                 <VerticalStackLayout Spacing="6">
-                                    <Label Text="TÜP VOLTAJI" Style="{StaticResource CaptionLabelStyle}" />
+                                    <Label Text="TUBE VOLTAGE" Style="{StaticResource CaptionLabelStyle}" />
                                     <Border Padding="11,0" BackgroundColor="{StaticResource FieldBackground}"
                                             Stroke="{StaticResource Stroke}" StrokeShape="RoundRectangle 11">
                                         <Grid ColumnDefinitions="*,Auto">
                                             <Entry Text="{Binding Kv}" Keyboard="Numeric" ReturnType="Next"
                                                    AutomationId="VoltageEntry"
-                                                   SemanticProperties.Description="Tüp voltajı, kilovolt" />
+                                                   SemanticProperties.Description="Tube voltage in kilovolts" />
                                             <Label Grid.Column="1" Text="kV" TextColor="{StaticResource TextMuted}" VerticalOptions="Center" />
                                         </Grid>
                                     </Border>
                                 </VerticalStackLayout>
 
                                 <VerticalStackLayout Grid.Column="1" Spacing="6">
-                                    <Label Text="TÜP GÜCÜ" Style="{StaticResource CaptionLabelStyle}" />
+                                    <Label Text="TUBE POWER" Style="{StaticResource CaptionLabelStyle}" />
                                     <Border Padding="11,0" BackgroundColor="{StaticResource FieldBackground}"
                                             Stroke="{StaticResource Stroke}" StrokeShape="RoundRectangle 11">
                                         <Grid ColumnDefinitions="*,Auto">
                                             <Entry Text="{Binding Watt}" Keyboard="Numeric" ReturnType="Next"
                                                    AutomationId="PowerEntry"
-                                                   SemanticProperties.Description="Tüp gücü, Watt" />
+                                                   SemanticProperties.Description="Tube power in watts" />
                                             <Label Grid.Column="1" Text="W" TextColor="{StaticResource TextMuted}" VerticalOptions="Center" />
                                         </Grid>
                                     </Border>
                                 </VerticalStackLayout>
                             </Grid>
 
+                            <Label Text="DETECTOR"
+                                   Style="{StaticResource EyebrowLabelStyle}"
+                                   Margin="0,4,0,0" />
+
                             <VerticalStackLayout Spacing="6">
-                                <Label Text="POZLAMA SÜRESİ" Style="{StaticResource CaptionLabelStyle}" />
+                                <Label Text="EXPOSURE TIME" Style="{StaticResource CaptionLabelStyle}" />
                                 <Border Padding="11,0" BackgroundColor="{StaticResource FieldBackground}"
                                         Stroke="{Binding ParametersAccentColor}" StrokeShape="RoundRectangle 11">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <Entry Text="{Binding ExposureTime}" Keyboard="Numeric" ReturnType="Done"
                                                AutomationId="ExposureEntry"
-                                               SemanticProperties.Description="Pozlama süresi, milisaniye" />
+                                               SemanticProperties.Description="Exposure time in milliseconds" />
                                         <Label Grid.Column="1" Text="ms" TextColor="{StaticResource TextMuted}" VerticalOptions="Center" />
                                     </Grid>
+                                </Border>
+                            </VerticalStackLayout>
+
+                            <VerticalStackLayout Spacing="6">
+                                <Label Text="SNAP DETECTOR MODE" Style="{StaticResource CaptionLabelStyle}" />
+                                <Border Padding="10,0"
+                                        BackgroundColor="{StaticResource FieldBackground}"
+                                        Stroke="{StaticResource Stroke}"
+                                        StrokeShape="RoundRectangle 11">
+                                    <Picker ItemsSource="{Binding SnapFrameModeOptions}"
+                                            SelectedItem="{Binding SelectedSnapFrameMode}"
+                                            IsEnabled="{Binding CanSelectSnapFrameMode}"
+                                            AutomationId="SnapFrameModePicker"
+                                            SemanticProperties.Description="LOW or RAW detector acquisition mode for SNAP" />
                                 </Border>
                             </VerticalStackLayout>
 
@@ -432,15 +548,15 @@
                                    LineBreakMode="WordWrap" />
                         </VerticalStackLayout>
                     </Border>
-                </VerticalStackLayout>
+                </Grid>
             </Grid>
 
             <!-- Son sensör ölçümleri -->
             <VerticalStackLayout Spacing="10">
                 <Grid ColumnDefinitions="*,Auto">
                     <VerticalStackLayout Spacing="2">
-                        <Label Text="LIVE TELEMETRY" Style="{StaticResource EyebrowLabelStyle}" />
-                        <Label Text="Son sensör ölçümü" Style="{StaticResource SectionTitleStyle}" />
+                        <Label Text="GRAB TELEMETRY" Style="{StaticResource EyebrowLabelStyle}" />
+                        <Label Text="Latest sensor measurement" Style="{StaticResource SectionTitleStyle}" />
                     </VerticalStackLayout>
                     <Label Grid.Column="1" Text="{Binding LastFrameTimeText}"
                            TextColor="{StaticResource TextMuted}" FontSize="10" VerticalOptions="End" />
@@ -494,10 +610,10 @@
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <VerticalStackLayout Spacing="2">
                             <Label Text="LOCAL HISTORY" Style="{StaticResource EyebrowLabelStyle}" />
-                            <Label Text="Son mobil çekimler" Style="{StaticResource SectionTitleStyle}" />
+                            <Label Text="Recent mobile captures" Style="{StaticResource SectionTitleStyle}" />
                         </VerticalStackLayout>
                         <Button Grid.Column="1"
-                                Text="YENİLE"
+                                Text="REFRESH"
                                 Command="{Binding RefreshHistoryCommand}"
                                 Padding="12,7"
                                 MinimumHeightRequest="38" />
@@ -506,7 +622,7 @@
                     <Grid IsVisible="{Binding HasNoRecentImages}" HeightRequest="92">
                         <VerticalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="5">
                             <Label Text="◇" TextColor="{StaticResource TextMuted}" FontSize="24" HorizontalTextAlignment="Center" />
-                            <Label Text="Henüz kaydedilmiş mobil snap yok"
+                            <Label Text="No mobile SNAP has been saved yet"
                                    TextColor="{StaticResource TextMuted}"
                                    FontSize="11"
                                    HorizontalTextAlignment="Center" />
@@ -527,7 +643,7 @@
                                         BackgroundColor="{StaticResource SurfaceSoft}"
                                         Stroke="{StaticResource Stroke}"
                                         StrokeShape="RoundRectangle 13"
-                                        SemanticProperties.Hint="Kaydedilmiş görüntüyü tam inceleme alanında açar">
+                                        SemanticProperties.Hint="Opens the saved image in the full review viewer">
                                     <Border.GestureRecognizers>
                                         <TapGestureRecognizer
                                             Command="{Binding Source={x:Reference PageRoot}, Path=BindingContext.LoadHistoryImageCommand}"
@@ -551,7 +667,7 @@
                                                        FontSize="10" />
                                             </VerticalStackLayout>
                                             <Label Grid.Column="1"
-                                                   Text="İNCELE"
+                                                   Text="REVIEW"
                                                    Style="{StaticResource CaptionLabelStyle}"
                                                    VerticalOptions="Center" />
                                         </Grid>
@@ -564,9 +680,10 @@
             </Border>
 
             <Grid ColumnDefinitions="*,Auto" Margin="2,8,2,0">
-                <Label Text="SIMULATION MODE · NOT FOR CLINICAL USE"
+                <Label Text="{Binding DataSourceStatusText}"
+                       TextColor="{Binding DataSourceStatusColor}"
                        Style="{StaticResource CaptionLabelStyle}" />
-                <Label Grid.Column="1" Text="XRS MOBILE 1.1"
+                <Label Grid.Column="1" Text="XRS MOBILE 1.4"
                        Style="{StaticResource CaptionLabelStyle}"
                        TextColor="{StaticResource Primary}" />
             </Grid>
@@ -585,17 +702,23 @@
                   ColumnSpacing="12"
                   BackgroundColor="{StaticResource Surface}">
                 <VerticalStackLayout Spacing="1" VerticalOptions="Center">
-                    <Label Text="GÖRÜNTÜ İNCELEME"
+                    <Label Text="IMAGE REVIEW"
                            Style="{StaticResource EyebrowLabelStyle}" />
-                    <Label Text="İki parmakla yakınlaştır · tek parmakla gez"
+                    <Label Text="Pinch to zoom · drag with one finger to pan"
                            TextColor="{StaticResource TextSecondary}"
                            FontSize="11" />
+                    <Label Text="{Binding DataSourceStatusText}"
+                           TextColor="{Binding DataSourceStatusColor}"
+                           AutomationId="FullScreenDataSourceStatusLabel"
+                           SemanticProperties.Description="Verified data source for the full-screen image"
+                           FontFamily="OpenSansSemibold"
+                           FontSize="9" />
                 </VerticalStackLayout>
                 <Button Grid.Column="1"
-                        Text="KAPAT"
+                        Text="CLOSE"
                         Clicked="OnCloseFullScreenClicked"
                         AutomationId="CloseFullScreenViewerButton"
-                        SemanticProperties.Description="Tam ekran görüntü incelemeyi kapat"
+                        SemanticProperties.Description="Close full-screen image review"
                         MinimumWidthRequest="76"
                         HeightRequest="42"
                         Padding="12,0" />
@@ -615,7 +738,7 @@
                            Aspect="AspectFit"
                            SizeChanged="OnFullScreenImageSizeChanged"
                            AutomationId="FullScreenSensorImage"
-                           SemanticProperties.Description="Tam ekran X-ray görüntüsü">
+                           SemanticProperties.Description="Full-screen X-ray image">
                         <Image.GestureRecognizers>
                             <PinchGestureRecognizer x:Name="FullScreenPinchGesture"
                                                     PinchUpdated="OnFullScreenImagePinchUpdated" />
@@ -624,6 +747,11 @@
                                                   PanUpdated="OnFullScreenImagePanUpdated" />
                         </Image.GestureRecognizers>
                     </Image>
+
+                    <GraphicsView x:Name="FullScreenPixelGrid"
+                                  InputTransparent="True"
+                                  IsVisible="False"
+                                  AutomationProperties.IsInAccessibleTree="False" />
 
                     <!-- Sabit merkez işareti, koordinata odaklanmanın gerçek hedefini gösterir. -->
                     <Grid WidthRequest="24"
@@ -649,7 +777,7 @@
                             VerticalOptions="Start"
                             InputTransparent="True">
                         <Label x:Name="FullScreenCenterCoordinateLabel"
-                               Text="MERKEZ X: —  Y: —"
+                               Text="CENTER X: —  Y: —"
                                TextColor="{StaticResource TextSecondary}"
                                FontFamily="OpenSansSemibold"
                                FontSize="10" />
@@ -682,7 +810,7 @@
                 <Button Text="−"
                         Clicked="OnFullScreenZoomOutClicked"
                         AutomationId="FullScreenZoomOutButton"
-                        SemanticProperties.Description="Tam ekran görüntüyü uzaklaştır"
+                        SemanticProperties.Description="Zoom out in the full-screen image"
                         WidthRequest="46"
                         HeightRequest="44"
                         Padding="0"
@@ -700,7 +828,7 @@
                         Text="+"
                         Clicked="OnFullScreenZoomInClicked"
                         AutomationId="FullScreenZoomInButton"
-                        SemanticProperties.Description="Tam ekran görüntüyü yakınlaştır"
+                        SemanticProperties.Description="Zoom in on the full-screen image"
                         WidthRequest="46"
                         HeightRequest="44"
                         Padding="0"
@@ -710,10 +838,10 @@
                        Style="{StaticResource CaptionLabelStyle}"
                        VerticalOptions="Center" />
                 <Button Grid.Column="4"
-                        Text="SIFIRLA"
+                        Text="RESET"
                         Clicked="OnFullScreenResetZoomClicked"
                         AutomationId="FullScreenResetZoomButton"
-                        SemanticProperties.Description="Tam ekran yakınlaştırma ve görüntü konumunu sıfırla"
+                        SemanticProperties.Description="Reset full-screen zoom and image position"
                         HeightRequest="44"
                         Padding="12,0"
                         FontSize="9" />
@@ -728,7 +856,7 @@
                     <Entry Grid.Column="1"
                            x:Name="FullScreenCoordinateXEntry"
                            AutomationId="FullScreenCoordinateXEntry"
-                           SemanticProperties.Description="Odaklanılacak görüntü X piksel koordinatı"
+                           SemanticProperties.Description="Image X pixel coordinate to focus"
                            Keyboard="Numeric"
                            Placeholder="X"
                            HeightRequest="42" />
@@ -739,15 +867,15 @@
                     <Entry Grid.Column="3"
                            x:Name="FullScreenCoordinateYEntry"
                            AutomationId="FullScreenCoordinateYEntry"
-                           SemanticProperties.Description="Odaklanılacak görüntü Y piksel koordinatı"
+                           SemanticProperties.Description="Image Y pixel coordinate to focus"
                            Keyboard="Numeric"
                            Placeholder="Y"
                            HeightRequest="42" />
                     <Button Grid.Column="4"
-                            Text="ODAKLA"
+                            Text="FOCUS"
                             Clicked="OnFullScreenFocusCoordinateClicked"
                             AutomationId="FullScreenFocusCoordinateButton"
-                            SemanticProperties.Description="Girilen görüntü koordinatını merkeze al ve yakınlaştır"
+                            SemanticProperties.Description="Center and zoom to the entered image coordinate"
                             HeightRequest="42"
                             Padding="12,0"
                             FontSize="9" />

@@ -190,10 +190,18 @@ public sealed class MockXRaySensorService : ISensorService, IDisposable
         await snapCompletion;
     }
 
-    public async Task<XRayMeasurement> SnapAsync(double exposureTime, CancellationToken cancellationToken = default)
+    public Task<XRayMeasurement> SnapAsync(
+        double exposureTime,
+        CancellationToken cancellationToken = default) =>
+        SnapAsync(new SnapRequest(exposureTime, SnapFrameMode.Raw), cancellationToken);
+
+    public async Task<XRayMeasurement> SnapAsync(
+        SnapRequest request,
+        CancellationToken cancellationToken = default)
     {
-        if (!double.IsFinite(exposureTime) || exposureTime < 1 || exposureTime > 3000)
-            throw new ArgumentOutOfRangeException(nameof(exposureTime));
+        ArgumentNullException.ThrowIfNull(request);
+        request.EnsureValid();
+        var exposureTime = request.ExposureTimeMs;
 
         var lifecycle = await EnterLifecycleAsync(cancellationToken).ConfigureAwait(false);
         var snapGeneration = 0;
@@ -256,18 +264,23 @@ public sealed class MockXRaySensorService : ISensorService, IDisposable
                 ExposureTime: exposureTime
             );
 
-            // Matematiksel Dijital Test Fantomu Üret (2304 x 2930, 16-bit)
-            var pixels = GenerateDigitalPhantomPixels(SnapWidth, SnapHeight, readings);
+            var snapWidth = request.FrameMode == SnapFrameMode.Low ? LiveWidth : SnapWidth;
+            var snapHeight = request.FrameMode == SnapFrameMode.Low ? LiveHeight : SnapHeight;
+            var pixels = GenerateDigitalPhantomPixels(snapWidth, snapHeight, readings);
 
             var frame = new RawGray16Frame(
-                pixels, SnapWidth, SnapHeight, SnapWidth * 2,
+                pixels, snapWidth, snapHeight, snapWidth * 2,
                 Gray16PixelFormat.Gray16LittleEndian,
                 FrameKind.Snap,
                 DateTimeOffset.UtcNow,
                 Guid.NewGuid(),
                 new AcquisitionSettings(readings.TubeCurrent, readings.Voltage, exposureTime, Profile),
-                "MockXRaySensorService",
-                SnapWidth * 2, "little", "top-left");
+                $"MockXRaySensorService:Snap{request.FrameMode}",
+                snapWidth * 2,
+                "little",
+                "top-left",
+                AcquisitionOperation.Snap,
+                request.FrameMode);
 
             CurrentStatus = DeviceStatus.Frozen;
             return new XRayMeasurement(readings, frame, isSimulator: true);
@@ -332,12 +345,15 @@ public sealed class MockXRaySensorService : ISensorService, IDisposable
                 var frame = new RawGray16Frame(
                     livePixels, LiveWidth, LiveHeight, LiveWidth * 2,
                     Gray16PixelFormat.Gray16LittleEndian,
-                    FrameKind.LivePreview,
+                    FrameKind.GrabPreview,
                     DateTimeOffset.UtcNow,
                     Guid.NewGuid(),
                     new AcquisitionSettings(readings.TubeCurrent, readings.Voltage, liveExposure, Profile),
-                    "MockXRaySensorService",
-                    LiveWidth * 2, "little", "top-left");
+                    "MockXRaySensorService:GrabLow",
+                    LiveWidth * 2,
+                    "little",
+                    "top-left",
+                    AcquisitionOperation.Grab);
 
                 var measurement = new XRayMeasurement(readings, frame, isSimulator: true);
                 if (token.IsCancellationRequested || generation != Volatile.Read(ref _producerGeneration))

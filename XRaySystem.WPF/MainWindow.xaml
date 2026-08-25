@@ -91,6 +91,187 @@
             </Style.Triggers>
         </Style>
 
+        <Style x:Key="AbortStopButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#D71920"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#FF8A92"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="FontSize" Value="17"/>
+            <Setter Property="Height" Value="56"/>
+            <Setter Property="MinWidth" Value="104"/>
+            <Setter Property="Padding" Value="24,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="StopBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="StopBorder" Property="Background" Value="#F02A32"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="StopBorder" Property="Background" Value="#2A3343"/>
+                                <Setter TargetName="StopBorder" Property="BorderBrush" Value="#4B5567"/>
+                                <Setter Property="Foreground" Value="#7D899B"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SnapModeComboBoxItemStyle" TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#F5F8FF"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="12,9"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="ItemBorder"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="3">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#151F32"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#163341"/>
+                                <Setter Property="Foreground" Value="#00E5FF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#667991"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SnapModeComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="Background" Value="#0A111E"/>
+            <Setter Property="Foreground" Value="#F5F8FF"/>
+            <Setter Property="BorderBrush" Value="#38506F"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Padding" Value="12,0,42,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="MaxDropDownHeight" Value="180"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource SnapModeComboBoxItemStyle}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="DropDownToggle"
+                                          Focusable="False"
+                                          ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="FieldBorder"
+                                                Background="{Binding Background, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                BorderBrush="{Binding BorderBrush, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                BorderThickness="{Binding BorderThickness, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                CornerRadius="4">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="38"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Border Grid.Column="1"
+                                                        BorderBrush="#25344D"
+                                                        BorderThickness="1,0,0,0">
+                                                    <Path x:Name="Arrow"
+                                                          Data="M 0 0 L 4 4 L 8 0 Z"
+                                                          Fill="#A7B6C9"
+                                                          Width="8"
+                                                          Height="4"
+                                                          Stretch="Fill"
+                                                          HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"/>
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="FieldBorder" Property="BorderBrush" Value="#00E5FF"/>
+                                                <Setter TargetName="Arrow" Property="Fill" Value="#00E5FF"/>
+                                            </Trigger>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="FieldBorder" Property="Background" Value="#0D1422"/>
+                                                <Setter TargetName="FieldBorder" Property="BorderBrush" Value="#00E5FF"/>
+                                                <Setter TargetName="Arrow" Property="Fill" Value="#00E5FF"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+
+                            <ContentPresenter x:Name="SelectedContent"
+                                              Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Left"
+                                              VerticalAlignment="Center"
+                                              IsHitTestVisible="False"
+                                              ContentSource="SelectionBoxItem"/>
+
+                            <Popup x:Name="PART_Popup"
+                                   Placement="Bottom"
+                                   AllowsTransparency="True"
+                                   Focusable="False"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   PopupAnimation="Fade">
+                                <Border Margin="0,4,0,0"
+                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                        Background="#0D1422"
+                                        BorderBrush="#38506F"
+                                        BorderThickness="1"
+                                        CornerRadius="4"
+                                        Padding="4">
+                                    <ScrollViewer CanContentScroll="True"
+                                                  VerticalScrollBarVisibility="Auto">
+                                        <StackPanel IsItemsHost="True"
+                                                    KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter Property="BorderBrush" Value="#00E5FF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Background" Value="#151F32"/>
+                                <Setter Property="BorderBrush" Value="#25344D"/>
+                                <Setter Property="Foreground" Value="#667991"/>
+                                <Setter TargetName="SelectedContent" Property="Opacity" Value="0.75"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="MetricLabelStyle" TargetType="TextBlock">
             <Setter Property="Foreground" Value="#64748B"/>
             <Setter Property="FontSize" Value="14"/>
@@ -149,14 +330,23 @@
             <StackPanel Orientation="Vertical">
                 <TextBlock Text="X-RAY VISION CORE" Foreground="#FFFFFF" FontSize="28" FontWeight="Bold"/>
                 <TextBlock Text="INDUSTRIAL CMOS SENSOR TELEMETRY" Foreground="#00F0FF" FontSize="12" FontWeight="SemiBold" Margin="0,2,0,0"/>
+                <TextBlock Text="{Binding DataSourceStatusText}"
+                           AutomationProperties.AutomationId="DataSourceStatusText"
+                           AutomationProperties.Name="Image data source status"
+                           Foreground="{Binding DataSourceStatusColor}"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Margin="0,4,0,0"/>
             </StackPanel>
                      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Command="{Binding SnapCommand}" Margin="0,0,10,0">
+                <Button Command="{Binding SnapCommand}"
+                        AutomationProperties.AutomationId="SnapButton"
+                        Margin="0,0,10,0">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
                             <Setter Property="Background" Value="#FF9500"/>
                             <Setter Property="Foreground" Value="#FFFFFF"/>
-                            <Setter Property="Content" Value="SNAP (HI-RES)"/>
+                            <Setter Property="Content" Value="{Binding SnapActionText}"/>
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsSnapping}" Value="True">
                                     <Setter Property="Content" Value="SNAPPING..."/>
@@ -168,26 +358,12 @@
                     </Button.Style>
                 </Button>
 
-                <Button Command="{Binding ResumeLiveCommand}" Margin="0,0,10,0">
+                <Button Command="{Binding ConnectCommand}"
+                        AutomationProperties.AutomationId="ConnectButton"
+                        Margin="0,0,10,0">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
-                            <Setter Property="Background" Value="#32D74B"/>
-                            <Setter Property="Foreground" Value="#FFFFFF"/>
-                            <Setter Property="Content" Value="RESUME LIVE"/>
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsPaused}" Value="True">
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Button.Style>
-                </Button>
-
-                <Button Command="{Binding ConnectAndStartCommand}" Margin="0,0,10,0">
-                    <Button.Style>
-                        <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
-                            <Setter Property="Content" Value="CONNECT &amp; CAPTURE"/>
+                            <Setter Property="Content" Value="CONNECT"/>
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsConnecting}" Value="True">
                                     <Setter Property="Content" Value="CONNECTING..."/>
@@ -198,8 +374,30 @@
                     </Button.Style>
                 </Button>
 
-                <Button Content="STOP STREAM" Command="{Binding StopCommand}" Style="{StaticResource DangerButtonStyle}" Margin="0,0,10,0"/>
-                <Button Content="DISCONNECT" Command="{Binding DisconnectCommand}" Style="{StaticResource DangerButtonStyle}"/>
+                <Button Content="{Binding StartGrabActionText}"
+                        Command="{Binding StartGrabCommand}"
+                        AutomationProperties.AutomationId="StartGrabButton"
+                        Style="{StaticResource PrimaryButtonStyle}"
+                        Margin="0,0,10,0"/>
+                <Button Content="FREEZE"
+                        Command="{Binding StopCommand}"
+                        AutomationProperties.AutomationId="FreezeGrabButton"
+                        AutomationProperties.Name="Freeze grab"
+                        AutomationProperties.HelpText="Stops GRAB normally and preserves the last image."
+                        Style="{StaticResource PrimaryButtonStyle}"
+                        Margin="0,0,10,0"/>
+                <Button Content="STOP"
+                        Command="{Binding AbortCommand}"
+                        AutomationProperties.AutomationId="AbortButton"
+                        AutomationProperties.Name="Stop acquisition"
+                        AutomationProperties.HelpText="Immediately aborts an active GRAB or SNAP. This software control does not replace the hardware emergency stop."
+                        ToolTip="ABORT ACQUISITION — Immediately stops an active GRAB or SNAP. This software control does not replace the hardware emergency stop."
+                        Style="{StaticResource AbortStopButtonStyle}"
+                        Margin="0,0,10,0"/>
+                <Button Content="DISCONNECT"
+                        Command="{Binding DisconnectCommand}"
+                        AutomationProperties.AutomationId="DisconnectButton"
+                        Style="{StaticResource DangerButtonStyle}"/>
             </StackPanel>
         </Grid>
 
@@ -263,10 +461,11 @@
                 <!-- KULLANICI PARAMETRE GİRDİLERİ (X-RAY TUBE INPUTS) -->
                 <Border Grid.Row="1" Style="{StaticResource PanelStyle}" Margin="0,0,0,10" Padding="16">
                     <StackPanel>
-                        <TextBlock Text="TÜP PARAMETRE GİRDİLERİ" Foreground="#00F0FF" FontSize="14" FontWeight="Bold" Margin="0,0,0,14"/>
+                        <TextBlock Text="ACQUISITION SETTINGS" Foreground="#00F0FF" FontSize="14" FontWeight="Bold" Margin="0,0,0,14"/>
+                        <TextBlock Text="X-RAY GENERATOR" Foreground="#5CFFFF" FontSize="10" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         
                         <!-- TUBE VOLTAGE (kV) INPUT -->
-                        <TextBlock Text="TÜP VOLTAJI (kV):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBlock Text="TUBE VOLTAGE (kV):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
                         <Grid Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -278,7 +477,7 @@
                         </Grid>
 
                         <!-- TUBE POWER (WATT) INPUT -->
-                        <TextBlock Text="TÜP GÜCÜ (WATT):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBlock Text="TUBE POWER (W):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
                         <Grid Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -289,8 +488,10 @@
                             <TextBlock Grid.Column="1" Text="W" Foreground="#94A3B8" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </Grid>
 
+                        <TextBlock Text="DETECTOR" Foreground="#5CFFFF" FontSize="10" FontWeight="SemiBold" Margin="0,3,0,8"/>
+
                         <!-- EXPOSURE TIME (ms) INPUT -->
-                        <TextBlock Text="POZLAMA SÜRESİ (ms):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBlock Text="EXPOSURE TIME (ms):" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,4"/>
                         <Grid Margin="0,0,0,4">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -300,6 +501,19 @@
                                      Style="{StaticResource ValidationInputTextBoxStyle}"/>
                             <TextBlock Grid.Column="1" Text="ms" Foreground="#94A3B8" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </Grid>
+
+                        <TextBlock Text="SNAP DETECTOR MODE:"
+                                   Foreground="#64748B"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Margin="0,8,0,4"/>
+                        <ComboBox ItemsSource="{Binding SnapFrameModeOptions}"
+                                  SelectedItem="{Binding SelectedSnapFrameMode, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanSelectSnapFrameMode}"
+                                  AutomationProperties.AutomationId="SnapFrameModePicker"
+                                  AutomationProperties.Name="SNAP detector mode"
+                                  AutomationProperties.HelpText="Select LOW preview or RAW detector output for the next SNAP."
+                                  Style="{StaticResource SnapModeComboBoxStyle}"/>
 
                         <TextBlock Text="{Binding ExposureValidationMessage}" FontSize="10" Margin="0,2,0,0">
                             <TextBlock.Style>
@@ -326,7 +540,7 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     
-                    <TextBlock Text="LIVE X-RAY SCAN MATRIX" Style="{StaticResource MetricLabelStyle}"/>
+                    <TextBlock Text="GRAB X-RAY SCAN MATRIX" Style="{StaticResource MetricLabelStyle}"/>
                     
                     <Border x:Name="XRayScanBorder" Grid.Row="1" BorderBrush="#334155" BorderThickness="1" Margin="0,15,0,0" CornerRadius="4" Background="#02040A" ClipToBounds="True"
                             MouseWheel="XRayImage_MouseWheel"
@@ -346,18 +560,23 @@
                                 </TransformGroup>
                               </Grid.RenderTransform>
                                 <Image x:Name="XRayImage" Source="{Binding CurrentFrame}" Stretch="Uniform" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
-                              <Path Data="M 150,0 L 150,300 M 0,150 L 300,150" Stroke="#00F0FF" StrokeThickness="0.5" Opacity="0.3" HorizontalAlignment="Center" VerticalAlignment="Center" Stretch="Uniform"/>
                             </Grid>
                              
                             <!-- Viewport HUD: deliberately outside ImageLayer. -->
                             <Grid>
                                 <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="15" IsHitTestVisible="False">
                                     <TextBlock Text="{Binding CurrentFrameResolution}" Foreground="#00F0FF" FontSize="12" Opacity="0.7"/>
-                                    <TextBlock x:Name="MainCenterCoordinateText" Text="MERKEZ X: —  Y: —" Foreground="#A7B6C9" FontSize="11" Margin="0,3,0,0"/>
-                                    <TextBlock x:Name="MainPointerCoordinateText" Text="İMLEÇ X: —  Y: —" Foreground="#667991" FontSize="10" Margin="0,2,0,0"/>
+                                    <TextBlock Text="{Binding FrameFreshnessText}"
+                                               AutomationProperties.AutomationId="FrameFreshnessText"
+                                               Foreground="{Binding FrameFreshnessColor}"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Margin="0,3,0,0"/>
+                                    <TextBlock x:Name="MainCenterCoordinateText" Text="CENTER X: —  Y: —" Foreground="#A7B6C9" FontSize="11" Margin="0,3,0,0"/>
+                                    <TextBlock x:Name="MainPointerCoordinateText" Text="POINTER X: —  Y: —" Foreground="#667991" FontSize="10" Margin="0,2,0,0"/>
                                 </StackPanel>
 
-                                <!-- CANLI / SNAP / GEÇMİŞ İNCELEME STATUS ROZETİ (Görsel durum belirteci) -->
+                                <!-- GRAB / SNAP / GEÇMİŞ İNCELEME STATUS ROZETİ -->
                                 <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="15" 
                                         Background="#0F172A" BorderBrush="{Binding ImageStatusBadgeColor}" BorderThickness="1.5"
                                         CornerRadius="6" Padding="12,6" IsHitTestVisible="False">
@@ -367,6 +586,15 @@
                                                    Foreground="#FFFFFF" FontSize="12" FontWeight="Bold" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Border>
+
+                                <!-- Koordinata odaklanma için sabit viewport merkezi. -->
+                                <Grid Width="24" Height="24"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      IsHitTestVisible="False">
+                                    <Rectangle Height="1" Fill="#00E5FF" VerticalAlignment="Center"/>
+                                    <Rectangle Width="1" Fill="#00E5FF" HorizontalAlignment="Center"/>
+                                </Grid>
 
                                 <!-- Zoom controls at bottom-left inside image viewport -->
                                 <StackPanel HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="15" Orientation="Horizontal">
@@ -482,7 +710,7 @@
                                         Grid.ColumnSpan="4"
                                         Orientation="Horizontal"
                                         Margin="0,9,0,0">
-                                <TextBlock Text="KOORDİNATA GİT"
+                                <TextBlock Text="GO TO COORDINATE"
                                            Foreground="#667991"
                                            FontSize="10"
                                            FontWeight="SemiBold"
@@ -492,19 +720,19 @@
                                 <TextBox x:Name="MainCoordinateXInput"
                                          Width="70"
                                          Style="{StaticResource ModernInputTextBoxStyle}"
-                                         ToolTip="Görüntü piksel X koordinatı"/>
+                                         ToolTip="Image pixel X coordinate"/>
                                 <TextBlock Text="Y" Foreground="#A7B6C9" VerticalAlignment="Center" Margin="9,0,5,0"/>
                                 <TextBox x:Name="MainCoordinateYInput"
                                          Width="70"
                                          Style="{StaticResource ModernInputTextBoxStyle}"
-                                         ToolTip="Görüntü piksel Y koordinatı"/>
+                                         ToolTip="Image pixel Y coordinate"/>
                                 <TextBlock Text="ZOOM %" Foreground="#A7B6C9" VerticalAlignment="Center" Margin="9,0,5,0"/>
                                 <TextBox x:Name="MainCoordinateZoomInput"
                                          Width="82"
                                          Text="800"
                                          Style="{StaticResource ModernInputTextBoxStyle}"
-                                         ToolTip="Koordinata gidildiğinde uygulanacak zoom yüzdesi"/>
-                                <Button Content="ODAKLA"
+                                         ToolTip="Zoom percentage applied when focusing the coordinate"/>
+                                <Button Content="FOCUS"
                                         Click="FocusCoordinate_Click"
                                         Height="34"
                                         MinWidth="72"
@@ -537,13 +765,13 @@
                     <!-- Başlık, İpucu ve Klasör Butonu -->
                     <StackPanel Grid.Row="0" Margin="0,0,0,12">
                         <TextBlock Text="IMAGE HISTORY" Foreground="#00F0FF" FontSize="13" FontWeight="Bold"/>
-                        <TextBlock Text="Snap çekim geçmişi" Foreground="#475569" FontSize="10" Margin="0,1,0,0"/>
+                        <TextBlock Text="Saved SNAP acquisitions" Foreground="#475569" FontSize="10" Margin="0,1,0,0"/>
                         <TextBlock x:Name="CompSelectionHint" 
-                                   Text="+ butonuna basarak karşılaştırma için görsel seçin (maks 4)"
+                                   Text="Use + to select images for comparison (max 4)"
                                    Foreground="#64748B" FontSize="9.5" TextWrapping="Wrap" Margin="0,4,0,8"/>
                         
                         <!-- Klasör Aç Butonu: Projenin Standart Cyan Paleti -->
-                        <Button Content="📁 KLASÖRÜ AÇ" 
+                        <Button Content="OPEN FOLDER"
                                 Click="OpenImageFolder_Click" 
                                 Background="#1E293B" Foreground="#00F0FF" BorderBrush="#334155" BorderThickness="1"
                                 FontSize="11" FontWeight="Bold" Height="30" Cursor="Hand" HorizontalAlignment="Stretch">
@@ -606,7 +834,7 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Grid.Column="0" Text="{Binding Timestamp, StringFormat={}{0:HH:mm:ss}}" 
                                                        Foreground="#00F0FF" FontSize="13" FontWeight="Bold"/>
-                                            <TextBlock Grid.Column="1" Text="AÇIK (EKRANDA)" Foreground="#00F0FF" FontSize="9" FontWeight="Bold" 
+                                            <TextBlock Grid.Column="1" Text="OPEN (DISPLAYED)" Foreground="#00F0FF" FontSize="9" FontWeight="Bold"
                                                        VerticalAlignment="Center">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
@@ -657,7 +885,7 @@
                                                     Click="AddToComparison_Click"
                                                     Width="28" Height="26"
                                                     Margin="0,0,4,0" Cursor="Hand"
-                                                    ToolTip="Karşılaştırmaya Ekle">
+                                                    ToolTip="Add to comparison">
                                                 <Button.Template>
                                                     <ControlTemplate TargetType="Button">
                                                         <Border x:Name="Bd" CornerRadius="4"
@@ -677,10 +905,10 @@
                                             </Button>
 
                                             <!-- Gezginde Aç -->
-                                            <Button Grid.Column="1" Content="📁 Gezgin" 
+                                            <Button Grid.Column="1" Content="EXPLORER"
                                                     Click="OpenSingleFileInExplorer_Click"
                                                     Background="#1E293B" Foreground="#94A3B8" BorderThickness="1" BorderBrush="#334155"
-                                                    FontSize="10" Height="26" Margin="0,0,3,0" Cursor="Hand" ToolTip="Dosya konumunu aç">
+                                                    FontSize="10" Height="26" Margin="0,0,3,0" Cursor="Hand" ToolTip="Open file location">
                                                 <Button.Template>
                                                     <ControlTemplate TargetType="Button">
                                                         <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
@@ -697,10 +925,10 @@
                                             </Button>
 
                                             <!-- Farklı Kaydet -->
-                                            <Button Grid.Column="2" Content="💾 Kaydet" 
+                                            <Button Grid.Column="2" Content="EXPORT"
                                                     Click="ExportSingleFile_Click"
                                                     Background="#1E293B" Foreground="#00F0FF" BorderThickness="1" BorderBrush="#334155"
-                                                    FontSize="10" Height="26" Margin="3,0,0,0" Cursor="Hand" ToolTip="Dışa kaydet">
+                                                    FontSize="10" Height="26" Margin="3,0,0,0" Cursor="Hand" ToolTip="Export image">
                                                 <Button.Template>
                                                     <ControlTemplate TargetType="Button">
                                                         <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
@@ -742,7 +970,7 @@
 
                 <!-- Action buttons -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                    <Button Content="⬡  SEÇİLENLERİ KARŞILAŞTIR" 
+                    <Button Content="COMPARE SELECTED"
                             Click="OpenComparison_Click"
                             Height="38" Padding="18,0"
                             Background="#00F0FF" Foreground="#0B0F19"
@@ -760,7 +988,7 @@
                             </ControlTemplate>
                         </Button.Template>
                     </Button>
-                    <Button Content="✕ TEMİZLE" 
+                    <Button Content="CLEAR"
                             Click="ClearComparison_Click"
                             Height="38" Padding="14,0" Margin="8,0,0,0"
                             Background="#1A0808" Foreground="#EF4444" 
@@ -801,6 +1029,22 @@
                 </Ellipse>
                 <TextBlock Text="SYSTEM STATUS:" Foreground="#64748B" FontSize="12" VerticalAlignment="Center"/>
                 <TextBlock Text="{Binding DeviceStatus, FallbackValue=DISCONNECTED}" Foreground="#FFFFFF" FontSize="12" FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                <TextBlock Text="X-RAY:" Foreground="#64748B" FontSize="12" Margin="28,0,0,0" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding XRayHardwareStateText}"
+                           AutomationProperties.AutomationId="VerifiedXRayStateText"
+                           Foreground="{Binding XRayHardwareStateColor}"
+                           FontSize="12"
+                           FontWeight="Bold"
+                           Margin="10,0,0,0"
+                           VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding GeneratorHardwareStateText}" Foreground="#A7B6C9" FontSize="11" Margin="24,0,0,0" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding DetectorHardwareStateText}" Foreground="#A7B6C9" FontSize="11" Margin="16,0,0,0" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding AcquisitionCoordinatorStateText}"
+                           AutomationProperties.AutomationId="AcquisitionCoordinatorStateText"
+                           Foreground="#A7B6C9"
+                           FontSize="11"
+                           Margin="16,0,0,0"
+                           VerticalAlignment="Center"/>
             </StackPanel>
         </Grid>
     </Grid>

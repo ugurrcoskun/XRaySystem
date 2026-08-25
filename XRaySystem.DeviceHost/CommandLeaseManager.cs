@@ -16,7 +16,7 @@ public sealed class CommandLeaseManager
 
     public bool TryAcquire(string clientId, DateTimeOffset now)
     {
-        EnsureClientId(clientId);
+        ValidateClientId(clientId);
         lock (_sync)
         {
             if (_owner is not null && _expiresAt > now &&
@@ -31,7 +31,7 @@ public sealed class CommandLeaseManager
 
     public void Release(string clientId)
     {
-        EnsureClientId(clientId);
+        ValidateClientId(clientId);
         lock (_sync)
         {
             if (!string.Equals(_owner, clientId, StringComparison.Ordinal)) return;
@@ -40,9 +40,11 @@ public sealed class CommandLeaseManager
         }
     }
 
-    private static void EnsureClientId(string clientId)
+    public static void ValidateClientId(string clientId)
     {
         if (string.IsNullOrWhiteSpace(clientId))
             throw new ArgumentException("Client ID boş olamaz.", nameof(clientId));
+        if (clientId.Length > 128 || clientId.Any(char.IsControl))
+            throw new ArgumentException("Client ID en fazla 128 görünür karakter olabilir.", nameof(clientId));
     }
 }
