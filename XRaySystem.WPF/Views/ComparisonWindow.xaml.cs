@@ -22,8 +22,7 @@ public partial class ComparisonWindow : Window
     private double _scale = 1.0;
     private double _translateX = 0.0;
     private double _translateY = 0.0;
-    private const double MinScale = 0.05;
-    private const double MaxScale = 200.0;
+    private const double MinScale = 1.0;
 
     // Per-panel transform references
     private readonly List<ScaleTransform> _scaleTransforms = new();
@@ -166,7 +165,7 @@ public partial class ComparisonWindow : Window
             Source = bmp,
             Stretch = Stretch.Uniform
         };
-        RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+        RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.NearestNeighbor);
         imageContainer.Children.Add(img);
 
         // Crosshair
@@ -379,8 +378,11 @@ public partial class ComparisonWindow : Window
     // ──────────────────────────────────────────────
     private void ApplyZoom(double factor, Point center, Border viewport)
     {
+        if (!double.IsFinite(factor) || factor <= 0) return;
         double oldScale = _scale;
-        double newScale = Math.Clamp(oldScale * factor, MinScale, MaxScale);
+        double requestedScale = oldScale * factor;
+        if (!double.IsFinite(requestedScale)) return;
+        double newScale = Math.Max(requestedScale, MinScale);
         if (Math.Abs(newScale - oldScale) < 1e-9) return;
 
         double originX = viewport.ActualWidth / 2.0;
@@ -388,9 +390,13 @@ public partial class ComparisonWindow : Window
         double imgX = (center.X - originX - _translateX) / oldScale + originX;
         double imgY = (center.Y - originY - _translateY) / oldScale + originY;
 
+        var nextTranslateX = center.X - originX - (imgX - originX) * newScale;
+        var nextTranslateY = center.Y - originY - (imgY - originY) * newScale;
+        if (!double.IsFinite(nextTranslateX) || !double.IsFinite(nextTranslateY)) return;
+
         _scale = newScale;
-        _translateX = center.X - originX - (imgX - originX) * newScale;
-        _translateY = center.Y - originY - (imgY - originY) * newScale;
+        _translateX = nextTranslateX;
+        _translateY = nextTranslateY;
 
         SyncAllTransforms();
     }
@@ -407,7 +413,15 @@ public partial class ComparisonWindow : Window
         UpdateZoomLabel();
     }
 
-    private void UpdateZoomLabel() => ZoomLabel.Text = $"{_scale * 100:0}%";
+    private void UpdateZoomLabel()
+    {
+        var percent = _scale * 100.0;
+        ZoomLabel.Text = double.IsFinite(percent)
+            ? percent < 1_000_000_000
+                ? $"{percent:0}%"
+                : $"{percent:0.###E+0}%"
+            : $"{_scale:0.###E+0}×";
+    }
 
     // ──────────────────────────────────────────────
     // Button handlers

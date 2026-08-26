@@ -21,7 +21,7 @@ Kaynağı, lisansı ve anonimleştirmesi doğrulanmamış `Infrastructure/Sample
 
 GitHub Actions CI, Linux üzerinde çekirdek testleri ve Windows üzerinde WPF derleme/Gray16 TIFF testini ayrı işler olarak çalıştırır. MAUI işi ilk temiz Android runtime doğrulamasından sonra eklenecektir; böylece henüz doğrulanmamış workload kurulumu CI sonucunu gizlemez.
 
-DeviceHost; REST cihaz komutları, SignalR status/telemetry olayları, sınırlı bellek içi remote geçmiş, 768 px low BMP ve on-demand `.xrayraw` binary indirme sağlar. Production HTTPS zorlaması, API-key authentication, Viewer/Operator/Admin rol politikaları, doğrulanmış kimliğe bağlı command audit, idempotency ve tek aktif istemci lease'i eklenmiştir. Ayrıntılar `XRaySystem.DeviceHost/README.md` içindedir.
+DeviceHost; REST cihaz komutları, SignalR status/telemetry olayları, HMAC/hash doğrulamalı kalıcı ortak acquisition kataloğu, cursor sayfalama, 768 px LOW BMP ve on-demand `.xrayraw` indirme sağlar. WPF tüm katalog geçmişini birleştirir; mobil LOW-first çalışır ve yerel cache'i son 30 kayıtla sınırlar. Production HTTPS zorlaması, API-key authentication, Viewer/Operator/Admin rol politikaları, doğrulanmış kimliğe bağlı command audit, idempotency ve tek aktif istemci lease'i eklenmiştir. Ayrıntılar `XRaySystem.DeviceHost/README.md` içindedir.
 
 `XRaySystem.RemoteClient`, status/telemetry olaylarını dinler, sequence tabanlı en güncel live BMP'yi indirir ve SNAP low/raw içeriklerini content-type doğrulamasıyla alır. `RemoteSensorService` bu hattı ortak `ISensorService` sözleşmesine uyarlar; böylece WPF ve MAUI aynı ViewModel/use case yapısıyla Local veya Remote çalışabilir. Gerçek uçtan uca kontrol `Tools/RemoteSmoke` ile yapılır.
 

@@ -193,18 +193,21 @@ public sealed class SensorEventRelay : IHostedService, IDisposable
                         telemetry.CapturedAtUtc),
                     cancellationToken).ConfigureAwait(false);
             }
-            await _hub.Clients.All.SendAsync(
-                DeviceEventNames.FrameReady,
-                new FrameReadyEventContract(
-                    telemetry.DeviceId,
-                    telemetry.SequenceNumber,
-                    telemetry.AcquisitionId,
-                    telemetry.Operation,
-                    telemetry.FrameKind,
-                    telemetry.Width,
-                    telemetry.Height,
-                    telemetry.CapturedAtUtc),
-                cancellationToken).ConfigureAwait(false);
+            if (measurement.Frame is { Kind: FrameKind.GrabPreview })
+            {
+                await _hub.Clients.All.SendAsync(
+                    DeviceEventNames.FrameReady,
+                    new FrameReadyEventContract(
+                        telemetry.DeviceId,
+                        telemetry.SequenceNumber,
+                        telemetry.AcquisitionId,
+                        telemetry.Operation,
+                        telemetry.FrameKind,
+                        telemetry.Width,
+                        telemetry.Height,
+                        telemetry.CapturedAtUtc),
+                    cancellationToken).ConfigureAwait(false);
+            }
             await _hub.Clients.All.SendAsync(
                 DeviceEventNames.TelemetryReceived,
                 telemetry,

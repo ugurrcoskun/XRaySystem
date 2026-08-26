@@ -19,6 +19,10 @@ await using var client = new RemoteDeviceClient(
 using var sensor = new RemoteSensorService(client);
 var lowFrameReceived = new TaskCompletionSource<RemoteLowFrame>(
     TaskCreationOptions.RunContinuationsAsynchronously);
+var correlatedGrabFrameReceived = new TaskCompletionSource<(RemoteLowFrame Low, GrabFrameReadyEventContract Ready)>(
+    TaskCreationOptions.RunContinuationsAsynchronously);
+var lowFramesBySequence = new System.Collections.Concurrent.ConcurrentDictionary<(Guid, long), RemoteLowFrame>();
+var readyFramesBySequence = new System.Collections.Concurrent.ConcurrentDictionary<(Guid, long), GrabFrameReadyEventContract>();
 var grabMeasurementReceived = new TaskCompletionSource<XRayMeasurement>(
     TaskCreationOptions.RunContinuationsAsynchronously);
 var snapCompleted = new TaskCompletionSource<SnapProgressEventContract>(
@@ -27,12 +31,17 @@ var verifiedExposureActive = new TaskCompletionSource<HardwareStateEventContract
     TaskCreationOptions.RunContinuationsAsynchronously);
 var exposureEnded = new TaskCompletionSource<ExposureEndedEventContract>(
     TaskCreationOptions.RunContinuationsAsynchronously);
-var grabFrameReady = new TaskCompletionSource<GrabFrameReadyEventContract>(
-    TaskCreationOptions.RunContinuationsAsynchronously);
 var grabFrozen = new TaskCompletionSource<GrabFrozenEventContract>(
     TaskCreationOptions.RunContinuationsAsynchronously);
 var remoteErrors = new System.Collections.Concurrent.ConcurrentQueue<DeviceErrorEventContract>();
-client.LowFrameReceived += frame => lowFrameReceived.TrySetResult(frame);
+client.LowFrameReceived += frame =>
+{
+    lowFrameReceived.TrySetResult(frame);
+    var key = (frame.AcquisitionId, frame.FrameSequence);
+    lowFramesBySequence[key] = frame;
+    if (readyFramesBySequence.TryGetValue(key, out var ready))
+        correlatedGrabFrameReceived.TrySetResult((frame, ready));
+};
 sensor.MeasurementReceived += measurement =>
 {
     if (measurement.Frame?.Kind == FrameKind.GrabPreview)
@@ -47,21 +56,29 @@ client.HardwareStateReceived += state =>
     if (state.XRayActive == true) verifiedExposureActive.TrySetResult(state);
 };
 client.ExposureEndedReceived += ended => exposureEnded.TrySetResult(ended);
-client.GrabFrameReadyReceived += frame => grabFrameReady.TrySetResult(frame);
+client.GrabFrameReadyReceived += frame =>
+{
+    var key = (frame.AcquisitionId, frame.SequenceNumber);
+    readyFramesBySequence[key] = frame;
+    if (lowFramesBySequence.TryGetValue(key, out var low))
+        correlatedGrabFrameReceived.TrySetResult((low, frame));
+};
 client.GrabFrozenReceived += frozen => grabFrozen.TrySetResult(frozen);
 client.ErrorReceived += remoteErrors.Enqueue;
 
 try
 {
     await sensor.ConnectAsync();
-    sensor.Parameters = new AcquisitionParameters(70, 3500, 1);
+    sensor.Parameters = new AcquisitionParameters(70, 210, 1);
     sensor.Profile = AcquisitionProfile.MedicalSpecimenLikePhantom;
     await sensor.StartCaptureAsync();
 
     var lowFrame = await lowFrameReceived.Task.WaitAsync(timeout.Token);
     var grabMeasurement = await grabMeasurementReceived.Task.WaitAsync(timeout.Token);
     var activeState = await verifiedExposureActive.Task.WaitAsync(timeout.Token);
-    var readyEvent = await grabFrameReady.Task.WaitAsync(timeout.Token);
+    var correlatedFrame = await correlatedGrabFrameReceived.Task.WaitAsync(timeout.Token);
+    lowFrame = correlatedFrame.Low;
+    var readyEvent = correlatedFrame.Ready;
     if (lowFrame.BmpBytes.Length < 2 ||
         lowFrame.BmpBytes[0] != (byte)'B' ||
         lowFrame.BmpBytes[1] != (byte)'M')
@@ -99,7 +116,7 @@ try
         lowSnap.Profile != AcquisitionProfile.MedicalSpecimenLikePhantom)
         throw new InvalidDataException("Remote SNAP LOW kaynak ve metadata uyuşmuyor.");
     if (lowSnap.RequestedParameters.VoltageKv != 70 ||
-        lowSnap.RequestedParameters.PowerW != 3500 ||
+        lowSnap.RequestedParameters.PowerW != 210 ||
         lowSnap.RequestedParameters.ExposureTimeMs != 1 ||
         lowSnap.Readings.VoltageProvenance != MeasurementProvenance.AppliedTarget ||
         lowSnap.Readings.TubeCurrentProvenance != MeasurementProvenance.Derived)

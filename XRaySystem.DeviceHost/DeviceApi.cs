@@ -1,6 +1,7 @@
 using XRaySystem.Contracts;
 using XRaySystem.Domain.ValueObjects;
 using XRaySystem.Infrastructure.Storage;
+using System.Buffers.Binary;
 
 namespace XRaySystem.DeviceHost;
 
@@ -82,19 +83,36 @@ public static class DeviceApi
             (string deviceId, SnapCommandRequest request, HttpContext context, DeviceCoordinator coordinator,
                 CommandLeaseManager lease, ILoggerFactory logs, CancellationToken cancellationToken) =>
                 ExecuteAsync(deviceId, request.CommandId, "snap", context, coordinator, lease, logs,
-                    ct => coordinator.SnapAsync(request, ct), cancellationToken))
+                    ct => coordinator.SnapAsync(
+                        request,
+                        ct,
+                        context.User.Identity?.Name,
+                        context.Request.Headers[DeviceProtocolHeaders.ClientId].FirstOrDefault()),
+                    cancellationToken))
             .RequireAuthorization(DeviceAuthorizationPolicies.Operator);
 
         endpoints.MapGet(DeviceApiRoutes.Images,
-            (string deviceId, DeviceCoordinator coordinator, RemoteImageBuffer imageBuffer) =>
-                coordinator.Matches(deviceId)
-                    ? Results.Ok(imageBuffer.GetMetadata())
-                    : Results.NotFound())
+            (string deviceId, int? skip, int? take, DeviceCoordinator coordinator,
+                IDeviceAcquisitionCatalog catalog) =>
+                GetImages(deviceId, skip, take, coordinator, catalog))
+            .RequireAuthorization(DeviceAuthorizationPolicies.Viewer);
+
+        endpoints.MapGet(DeviceApiRoutes.ImagePage,
+            (string deviceId, int? take, string? cursor, DeviceCoordinator coordinator,
+                IDeviceAcquisitionCatalog catalog) =>
+                GetImagePage(deviceId, take, cursor, coordinator, catalog))
+            .RequireAuthorization(DeviceAuthorizationPolicies.Viewer);
+
+        endpoints.MapGet(DeviceApiRoutes.ImageMetadata,
+            (string deviceId, Guid imageId, DeviceCoordinator coordinator,
+                IDeviceAcquisitionCatalog catalog) =>
+                GetImageMetadata(deviceId, imageId, coordinator, catalog))
             .RequireAuthorization(DeviceAuthorizationPolicies.Viewer);
 
         endpoints.MapGet(DeviceApiRoutes.Image,
-            (Guid imageId, string? mode, RemoteImageBuffer imageBuffer) =>
-                GetImage(imageId, mode, imageBuffer))
+            (Guid imageId, string? mode, RemoteImageBuffer imageBuffer,
+                IDeviceAcquisitionArchive archive) =>
+                GetImage(imageId, mode, imageBuffer, archive))
             .RequireAuthorization(DeviceAuthorizationPolicies.Viewer);
 
         endpoints.MapGet(DeviceApiRoutes.LatestLiveFrame,
@@ -130,19 +148,72 @@ public static class DeviceApi
         return Results.File(frame.LowBmp, "image/bmp");
     }
 
-    private static IResult GetImage(Guid imageId, string? mode, RemoteImageBuffer imageBuffer)
+    private static IResult GetImages(
+        string deviceId,
+        int? skip,
+        int? take,
+        DeviceCoordinator coordinator,
+        IDeviceAcquisitionCatalog catalog)
+    {
+        if (!coordinator.Matches(deviceId)) return Results.NotFound();
+        var effectiveSkip = skip ?? 0;
+        var effectiveTake = take ?? 100;
+        if (effectiveSkip < 0 || effectiveTake is < 1 or > 200)
+            return Results.Problem(
+                "skip sıfır veya pozitif, take ise 1–200 arasında olmalıdır.",
+                statusCode: StatusCodes.Status400BadRequest);
+        return Results.Ok(catalog.GetMetadataPage(effectiveSkip, effectiveTake));
+    }
+
+    private static IResult GetImagePage(
+        string deviceId,
+        int? take,
+        string? cursor,
+        DeviceCoordinator coordinator,
+        IDeviceAcquisitionCatalog catalog)
+    {
+        if (!coordinator.Matches(deviceId)) return Results.NotFound();
+        var effectiveTake = take ?? 100;
+        if (effectiveTake is < 1 or > 200)
+            return Results.Problem(
+                "take 1–200 arasında olmalıdır.",
+                statusCode: StatusCodes.Status400BadRequest);
+        if (!TryDecodeCatalogCursor(cursor, out var beforeCapturedAtUtc, out var beforeImageId))
+            return Results.Problem(
+                "cursor geçersizdir.",
+                statusCode: StatusCodes.Status400BadRequest);
+
+        var items = catalog.GetMetadataPage(beforeCapturedAtUtc, beforeImageId, effectiveTake);
+        var nextCursor = items.Count == effectiveTake
+            ? EncodeCatalogCursor(items[^1])
+            : null;
+        return Results.Ok(new RemoteImageCatalogPageContract(items, nextCursor));
+    }
+
+    private static IResult GetImage(
+        Guid imageId,
+        string? mode,
+        RemoteImageBuffer imageBuffer,
+        IDeviceAcquisitionArchive archive)
     {
         if (string.Equals(mode, "low", StringComparison.OrdinalIgnoreCase))
         {
-            return imageBuffer.TryGetLow(imageId, out var lowBmp)
-                ? Results.File(lowBmp.ToArray(), "image/bmp", $"{imageId:N}.bmp")
+            if (imageBuffer.TryGetLow(imageId, out var lowBmp))
+                return Results.File(lowBmp.ToArray(), "image/bmp", $"{imageId:N}.bmp");
+            return archive.TryLoad(imageId, out var archived) && archived is not null
+                ? Results.File(archived.LowPreviewBmp, "image/bmp", $"{imageId:N}.bmp")
                 : Results.NotFound();
         }
 
         if (string.Equals(mode, "raw", StringComparison.OrdinalIgnoreCase))
         {
-            if (!imageBuffer.TryGetRaw(imageId, out var frame) || frame is null)
-                return Results.NotFound();
+            RawGray16Frame? frame;
+            if (!imageBuffer.TryGetRaw(imageId, out frame) || frame is null)
+            {
+                if (!archive.TryLoad(imageId, out var archived) || archived is null)
+                    return Results.NotFound();
+                frame = archived.Frame;
+            }
             using var stream = new MemoryStream();
             Gray16RawFileCodec.Write(stream, frame);
             return Results.File(
@@ -154,6 +225,54 @@ public static class DeviceApi
         return Results.Problem(
             "mode query değeri 'low' veya 'raw' olmalıdır.",
             statusCode: StatusCodes.Status400BadRequest);
+    }
+
+    private static IResult GetImageMetadata(
+        string deviceId,
+        Guid imageId,
+        DeviceCoordinator coordinator,
+        IDeviceAcquisitionCatalog catalog)
+    {
+        if (!coordinator.Matches(deviceId)) return Results.NotFound();
+        return catalog.TryGetMetadata(imageId, out var metadata) && metadata is not null
+            ? Results.Ok(metadata)
+            : Results.NotFound();
+    }
+
+    private static string EncodeCatalogCursor(RemoteImageMetadataContract metadata)
+    {
+        Span<byte> payload = stackalloc byte[24];
+        BinaryPrimitives.WriteInt64BigEndian(payload, metadata.CapturedAtUtc.UtcDateTime.Ticks);
+        metadata.ImageId.TryWriteBytes(payload[8..]);
+        return Convert.ToBase64String(payload)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    private static bool TryDecodeCatalogCursor(
+        string? cursor,
+        out DateTimeOffset? capturedAtUtc,
+        out Guid? imageId)
+    {
+        capturedAtUtc = null;
+        imageId = null;
+        if (string.IsNullOrWhiteSpace(cursor)) return true;
+        try
+        {
+            var encoded = cursor.Trim().Replace('-', '+').Replace('_', '/');
+            encoded = encoded.PadRight(encoded.Length + ((4 - encoded.Length % 4) % 4), '=');
+            var payload = Convert.FromBase64String(encoded);
+            if (payload.Length != 24) return false;
+            var ticks = BinaryPrimitives.ReadInt64BigEndian(payload.AsSpan(0, 8));
+            capturedAtUtc = new DateTimeOffset(ticks, TimeSpan.Zero);
+            imageId = new Guid(payload.AsSpan(8, 16));
+            return imageId != Guid.Empty;
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentOutOfRangeException)
+        {
+            return false;
+        }
     }
 
     private static async Task<IResult> ExecuteAsync<T>(

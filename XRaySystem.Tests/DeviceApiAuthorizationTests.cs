@@ -249,6 +249,76 @@ public sealed class DeviceApiAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public async Task Viewer_can_list_and_download_persisted_images_but_cannot_create_them()
+    {
+        const string operatorClientId = "operator-image-owner";
+        using var connectRequest = CreateCommand("connect", OperatorKey, operatorClientId);
+        using var connect = await _client.SendAsync(connectRequest);
+        Assert.Equal(HttpStatusCode.OK, connect.StatusCode);
+
+        using var snapRequest = CreateSnap(Guid.NewGuid(), OperatorKey, operatorClientId);
+        using var snap = await _client.SendAsync(snapRequest);
+        Assert.Equal(HttpStatusCode.OK, snap.StatusCode);
+        var snapResult = await snap.Content.ReadFromJsonAsync<SnapCommandResult>();
+        Assert.NotNull(snapResult);
+
+        using var listRequest = CreateGet("/api/devices/mock-01/images?skip=0&take=10", ViewerKey);
+        using var list = await _client.SendAsync(listRequest);
+        Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+        var catalog = await list.Content.ReadFromJsonAsync<RemoteImageMetadataContract[]>();
+        var listed = Assert.Single(catalog!);
+        Assert.Equal(snapResult.Image.ImageId, listed.ImageId);
+        Assert.Equal("operator-test", listed.InitiatedBySubject);
+        Assert.Equal(operatorClientId, listed.InitiatedByClientId);
+
+        using var pageRequest = CreateGet(
+            "/api/devices/mock-01/images/page?take=1",
+            ViewerKey);
+        using var pageResponse = await _client.SendAsync(pageRequest);
+        Assert.Equal(HttpStatusCode.OK, pageResponse.StatusCode);
+        var page = await pageResponse.Content.ReadFromJsonAsync<RemoteImageCatalogPageContract>();
+        Assert.NotNull(page);
+        Assert.Equal(listed.ImageId, Assert.Single(page.Items).ImageId);
+        Assert.False(string.IsNullOrWhiteSpace(page.NextCursor));
+
+        using var lastPageRequest = CreateGet(
+            $"/api/devices/mock-01/images/page?take=1&cursor={Uri.EscapeDataString(page.NextCursor!)}",
+            ViewerKey);
+        using var lastPageResponse = await _client.SendAsync(lastPageRequest);
+        Assert.Equal(HttpStatusCode.OK, lastPageResponse.StatusCode);
+        var lastPage = await lastPageResponse.Content.ReadFromJsonAsync<RemoteImageCatalogPageContract>();
+        Assert.NotNull(lastPage);
+        Assert.Empty(lastPage.Items);
+        Assert.Null(lastPage.NextCursor);
+
+        using var invalidCursorRequest = CreateGet(
+            "/api/devices/mock-01/images/page?cursor=not-valid",
+            ViewerKey);
+        using var invalidCursorResponse = await _client.SendAsync(invalidCursorRequest);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidCursorResponse.StatusCode);
+
+        using var metadataRequest = CreateGet(
+            $"/api/devices/mock-01/images/{listed.ImageId:D}",
+            ViewerKey);
+        using var metadata = await _client.SendAsync(metadataRequest);
+        Assert.Equal(HttpStatusCode.OK, metadata.StatusCode);
+
+        using var lowRequest = CreateGet($"/api/images/{listed.ImageId:D}?mode=low", ViewerKey);
+        using var low = await _client.SendAsync(lowRequest);
+        Assert.Equal(HttpStatusCode.OK, low.StatusCode);
+        Assert.Equal("image/bmp", low.Content.Headers.ContentType?.MediaType);
+
+        using var rawRequest = CreateGet($"/api/images/{listed.ImageId:D}?mode=raw", ViewerKey);
+        using var raw = await _client.SendAsync(rawRequest);
+        Assert.Equal(HttpStatusCode.OK, raw.StatusCode);
+        Assert.Equal("application/vnd.xraysystem.gray16", raw.Content.Headers.ContentType?.MediaType);
+
+        using var forbiddenSnap = CreateSnap(Guid.NewGuid(), ViewerKey, "viewer-image-client");
+        using var forbidden = await _client.SendAsync(forbiddenSnap);
+        Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+    }
+
+    [Fact]
     public async Task Persistence_failure_returns_507_and_same_command_retry_stays_failed()
     {
         using var failureFactory = _factory.WithWebHostBuilder(builder =>

@@ -19,6 +19,8 @@ public sealed record AcquisitionArtifactFiles(
     string RawPath,
     string? MetadataPath = null);
 
+public sealed record AcquisitionPreviewFile(string FileStem, string PreviewPath);
+
 /// <summary>
 /// Writes the canonical Gray16 source and its display derivative as one
 /// recoverable pair. Temporary files are verified before either final name is
@@ -76,6 +78,97 @@ public sealed class AcquisitionArtifactStorage
             requestedFileStem,
             metadataBytes,
             normalizedMetadataExtension);
+    }
+
+    public AcquisitionPreviewFile SavePreviewOnly(
+        byte[] previewBytes,
+        string previewExtension,
+        string requestedFileStem,
+        Guid acquisitionId)
+    {
+        ArgumentNullException.ThrowIfNull(previewBytes);
+        if (acquisitionId == Guid.Empty)
+            throw new ArgumentException("Acquisition ID boş olamaz.", nameof(acquisitionId));
+        var extension = NormalizeAndValidatePreview(previewBytes, previewExtension);
+        var baseStem = SanitizeFileStem(requestedFileStem);
+
+        lock (_writeGate)
+        {
+            for (var attempt = 0; attempt < MaxCollisionAttempts; attempt++)
+            {
+                var stem = CreateCandidateStem(baseStem, acquisitionId, attempt);
+                var previewPath = Path.Combine(_baseFolder, stem + extension);
+                var rawPath = Path.Combine(_baseFolder, stem + ".xrayraw");
+                if (File.Exists(previewPath) || File.Exists(rawPath)) continue;
+
+                var temporaryPath = previewPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    WriteBytes(temporaryPath, previewBytes);
+                    if (!File.ReadAllBytes(temporaryPath).AsSpan().SequenceEqual(previewBytes))
+                        throw new InvalidDataException("Yazılan preview bütünlük doğrulaması başarısız.");
+                    File.Move(temporaryPath, previewPath);
+                    return new AcquisitionPreviewFile(stem, previewPath);
+                }
+                catch (IOException) when (File.Exists(previewPath))
+                {
+                    DeleteIfExists(temporaryPath);
+                    continue;
+                }
+                catch
+                {
+                    DeleteIfExists(temporaryPath);
+                    throw;
+                }
+            }
+        }
+
+        throw new IOException("Çakışmasız preview dosya adı ayrılamadı.");
+    }
+
+    public string SaveRawBesidePreview(RawGray16Frame rawFrame, string previewPath)
+    {
+        ArgumentNullException.ThrowIfNull(rawFrame);
+        EnsureContainedExistingFile(previewPath);
+        var fullPreviewPath = Path.GetFullPath(previewPath);
+        if (!Path.GetExtension(fullPreviewPath).Equals(".bmp", StringComparison.OrdinalIgnoreCase) &&
+            !Path.GetExtension(fullPreviewPath).Equals(".tif", StringComparison.OrdinalIgnoreCase) &&
+            !Path.GetExtension(fullPreviewPath).Equals(".tiff", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("RAW yalnız doğrulanmış BMP/TIFF preview yanına kaydedilebilir.");
+        var rawPath = Path.ChangeExtension(fullPreviewPath, ".xrayraw");
+
+        lock (_writeGate)
+        {
+            if (File.Exists(rawPath))
+            {
+                using var existingStream = File.OpenRead(rawPath);
+                var existing = Gray16RawFileCodec.Read(existingStream);
+                EnsureSameRawIdentity(existing, rawFrame);
+                return rawPath;
+            }
+
+            var temporaryPath = rawPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var stream = CreateWriteStream(temporaryPath))
+                {
+                    Gray16RawFileCodec.Write(stream, rawFrame);
+                    stream.Flush(flushToDisk: true);
+                }
+                using (var verifyStream = File.OpenRead(temporaryPath))
+                {
+                    var verified = Gray16RawFileCodec.Read(verifyStream);
+                    EnsureSameRawIdentity(verified, rawFrame);
+                }
+                File.Move(temporaryPath, rawPath);
+                return rawPath;
+            }
+            catch
+            {
+                DeleteIfExists(temporaryPath);
+                throw;
+            }
+        }
     }
 
     private AcquisitionArtifactFiles SaveCore(
@@ -283,6 +376,16 @@ public sealed class AcquisitionArtifactStorage
         using var stream = CreateWriteStream(path);
         stream.Write(bytes);
         stream.Flush(flushToDisk: true);
+    }
+
+    private static void EnsureSameRawIdentity(RawGray16Frame actual, RawGray16Frame expected)
+    {
+        if (actual.AcquisitionId != expected.AcquisitionId ||
+            actual.Width != expected.Width ||
+            actual.Height != expected.Height ||
+            actual.Operation != expected.Operation ||
+            actual.SnapFrameMode != expected.SnapFrameMode)
+            throw new InvalidDataException("RAW acquisition kimliği preview kaydıyla uyuşmuyor.");
     }
 
     private static FileStream CreateWriteStream(string path) => new(

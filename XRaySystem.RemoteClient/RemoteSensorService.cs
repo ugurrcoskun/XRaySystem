@@ -14,7 +14,7 @@ namespace XRaySystem.RemoteClient;
 public sealed class RemoteSensorService : IAcquisitionCoordinator, IDisposable
 {
     private readonly IRemoteDeviceClient _client;
-    private AcquisitionParameters _parameters = new(70, 3500, 500);
+    private AcquisitionParameters _parameters = new(70, 210, 500);
     private int _profile = (int)AcquisitionProfile.IndustrialQaPhantom;
     private int _currentStatus = (int)DeviceStatus.Disconnected;
     private TelemetryEventContract? _latestTelemetry;
@@ -153,28 +153,8 @@ public sealed class RemoteSensorService : IAcquisitionCoordinator, IDisposable
         var rawBytes = await _client
             .GetRawImageAsync(result.Image.ImageId, cancellationToken)
             .ConfigureAwait(false);
-        using var stream = new MemoryStream(rawBytes, writable: false);
-        var frame = Gray16RawFileCodec.Read(stream);
-        EnsureRawMatchesMetadata(frame, result.Image);
-
-        var measured = result.Image.MeasuredTelemetry;
-        var measurement = new XRayMeasurement(
-            result.Image.ImageId,
-            result.Image.CapturedAtUtc.UtcDateTime,
-            new SensorReadings(
-                measured.TubeCurrentMa,
-                measured.VoltageKv,
-                measured.XRayIntensity,
-                measured.ExposureTimeMs,
-                ToDomain(measured.TubeCurrentProvenance),
-                ToDomain(measured.VoltageProvenance),
-                ToDomain(measured.ExposureTimeProvenance)),
-            frame,
-            result.Device.IsSimulator,
-            new AcquisitionParameters(
-                result.Image.RequestedParameters.VoltageKv,
-                result.Image.RequestedParameters.PowerW,
-                result.Image.RequestedParameters.ExposureTimeMs));
+        var metadata = result.Image with { IsSimulator = result.Device.IsSimulator };
+        var measurement = RemoteImageMeasurementFactory.Create(metadata, rawBytes);
         PublishMeasurement(measurement);
         return measurement;
     }
@@ -457,26 +437,6 @@ public sealed class RemoteSensorService : IAcquisitionCoordinator, IDisposable
             MeasurementProvenanceContract.Derived => MeasurementProvenance.Derived,
             _ => MeasurementProvenance.Unknown
         };
-
-    private static void EnsureRawMatchesMetadata(
-        RawGray16Frame frame,
-        RemoteImageMetadataContract metadata)
-    {
-        if (frame.AcquisitionId != metadata.AcquisitionId ||
-            frame.Width != metadata.Width ||
-            frame.Height != metadata.Height ||
-            frame.StrideBytes != metadata.StrideBytes ||
-            !string.Equals(frame.PixelFormat.ToString(), metadata.PixelFormat, StringComparison.Ordinal) ||
-            !string.Equals(frame.Kind.ToString(), metadata.Kind, StringComparison.Ordinal) ||
-            !string.Equals(frame.Settings.Profile.ToString(), metadata.Profile, StringComparison.Ordinal) ||
-            metadata.Operation != AcquisitionOperationContract.Snap ||
-            metadata.SnapFrameMode is null ||
-            frame.Operation != AcquisitionOperation.Snap ||
-            frame.SnapFrameMode != (metadata.SnapFrameMode == SnapFrameModeContract.Low
-                ? SnapFrameMode.Low
-                : SnapFrameMode.Raw))
-            throw new InvalidDataException("Remote raw görüntü ve SNAP metadata uyuşmuyor.");
-    }
 
     private static void EnsureSucceeded(bool succeeded, string message)
     {

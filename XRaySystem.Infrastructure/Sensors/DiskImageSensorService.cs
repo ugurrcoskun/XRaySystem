@@ -92,7 +92,7 @@ public sealed class DiskImageSensorService : ISensorService, IDisposable
     public event Action<DeviceStatus>? StatusChanged;
     public event Action<XRayMeasurement>? MeasurementReceived;
     public AcquisitionProfile Profile { get; set; } = AcquisitionProfile.IndustrialQaPhantom;
-    private AcquisitionParameters _parameters = new(70.0, 3500.0, 500.0);
+    private AcquisitionParameters _parameters = new(70.0, 210.0, 500.0);
     public AcquisitionParameters Parameters
     {
         get => Volatile.Read(ref _parameters);

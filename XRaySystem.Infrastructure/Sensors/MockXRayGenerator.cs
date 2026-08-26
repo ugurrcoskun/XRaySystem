@@ -10,7 +10,7 @@ namespace XRaySystem.Infrastructure.Sensors;
 public sealed class MockXRayGenerator : IXRayGenerator
 {
     private readonly object _gate = new();
-    private GeneratorTechnique _technique = new(70, 3500);
+    private GeneratorTechnique _technique = new(70, 210);
     private bool _isConnected;
     private bool _isPrepared;
     private bool _isExposureActive;

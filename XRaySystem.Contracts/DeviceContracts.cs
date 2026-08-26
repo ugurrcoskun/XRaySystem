@@ -105,7 +105,14 @@ public sealed record RemoteImageMetadataContract(
     bool RawAvailable,
     AcquisitionOperationContract Operation = AcquisitionOperationContract.Snap,
     SnapFrameModeContract? SnapFrameMode = SnapFrameModeContract.Raw,
-    bool PersistedOnDevice = false);
+    bool PersistedOnDevice = false,
+    bool? IsSimulator = null,
+    string? InitiatedBySubject = null,
+    string? InitiatedByClientId = null);
+
+public sealed record RemoteImageCatalogPageContract(
+    IReadOnlyList<RemoteImageMetadataContract> Items,
+    string? NextCursor);
 
 public sealed record SnapCommandResult(
     Guid CommandId,
@@ -135,7 +142,8 @@ public sealed record FrameReadyEventContract(
     string FrameKind,
     int Width,
     int Height,
-    DateTimeOffset CapturedAtUtc);
+    DateTimeOffset CapturedAtUtc,
+    Guid? ImageId = null);
 
 public sealed record GrabFrameReadyEventContract(
     string DeviceId,
@@ -222,6 +230,8 @@ public static class DeviceApiRoutes
     public const string LatestGrabFrame = Device + "/grab/latest";
     public const string Abort = Device + "/abort";
     public const string Images = Device + "/images";
+    public const string ImagePage = Images + "/page";
+    public const string ImageMetadata = Images + "/{imageId:guid}";
     public const string Image = "/api/images/{imageId:guid}";
     // One-release compatibility aliases for clients built before the GRAB migration.
     public const string StartLive = Device + "/live/start";

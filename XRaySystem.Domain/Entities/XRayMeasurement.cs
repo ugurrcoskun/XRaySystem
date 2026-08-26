@@ -78,6 +78,56 @@ public class XRayMeasurement
         SourceMarker = frame.SourceMarker;
     }
 
+    public static XRayMeasurement CreateCatalogEntry(
+        Guid id,
+        DateTime timestampUtc,
+        SensorReadings readings,
+        AcquisitionProfile profile,
+        bool isSimulator,
+        AcquisitionParameters requestedParameters,
+        Guid acquisitionId,
+        AcquisitionOperation operation,
+        SnapFrameMode? snapFrameMode,
+        int sourceWidth,
+        int sourceHeight,
+        string? sourceMarker)
+    {
+        if (id == Guid.Empty) throw new ArgumentException("Ölçüm ID boş olamaz.", nameof(id));
+        ArgumentNullException.ThrowIfNull(readings);
+        ArgumentNullException.ThrowIfNull(requestedParameters);
+        requestedParameters.EnsureValid();
+        if (!Enum.IsDefined(profile)) throw new ArgumentOutOfRangeException(nameof(profile));
+        if (acquisitionId == Guid.Empty)
+            throw new ArgumentException("Acquisition ID boş olamaz.", nameof(acquisitionId));
+        if (!Enum.IsDefined(operation)) throw new ArgumentOutOfRangeException(nameof(operation));
+        if (operation == AcquisitionOperation.Snap &&
+            (snapFrameMode is null || !Enum.IsDefined(snapFrameMode.Value)))
+            throw new ArgumentException("SNAP katalog kaydı geçerli frame modu taşımalıdır.", nameof(snapFrameMode));
+        if (operation != AcquisitionOperation.Snap && snapFrameMode is not null)
+            throw new ArgumentException("GRAB katalog kaydı SNAP modu taşıyamaz.", nameof(snapFrameMode));
+        if (sourceWidth <= 0) throw new ArgumentOutOfRangeException(nameof(sourceWidth));
+        if (sourceHeight <= 0) throw new ArgumentOutOfRangeException(nameof(sourceHeight));
+
+        return new XRayMeasurement
+        {
+            Id = id,
+            Timestamp = timestampUtc.Kind == DateTimeKind.Utc
+                ? timestampUtc
+                : timestampUtc.ToUniversalTime(),
+            Readings = readings,
+            Frame = null,
+            Profile = profile,
+            IsSimulator = isSimulator,
+            RequestedParameters = requestedParameters,
+            AcquisitionId = acquisitionId,
+            Operation = operation,
+            SnapFrameMode = snapFrameMode,
+            SourceWidth = sourceWidth,
+            SourceHeight = sourceHeight,
+            SourceMarker = sourceMarker?.Trim() ?? string.Empty
+        };
+    }
+
     public void SetImagePath(string path)
     {
         ImagePath = path;

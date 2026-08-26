@@ -358,22 +358,6 @@
                     </Button.Style>
                 </Button>
 
-                <Button Command="{Binding ConnectCommand}"
-                        AutomationProperties.AutomationId="ConnectButton"
-                        Margin="0,0,10,0">
-                    <Button.Style>
-                        <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
-                            <Setter Property="Content" Value="CONNECT"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsConnecting}" Value="True">
-                                    <Setter Property="Content" Value="CONNECTING..."/>
-                                    <Setter Property="Background" Value="#1E293B"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Button.Style>
-                </Button>
-
                 <Button Content="{Binding StartGrabActionText}"
                         Command="{Binding StartGrabCommand}"
                         AutomationProperties.AutomationId="StartGrabButton"
@@ -394,6 +378,21 @@
                         ToolTip="ABORT ACQUISITION — Immediately stops an active GRAB or SNAP. This software control does not replace the hardware emergency stop."
                         Style="{StaticResource AbortStopButtonStyle}"
                         Margin="0,0,10,0"/>
+                <Button Command="{Binding ConnectCommand}"
+                        AutomationProperties.AutomationId="ConnectButton"
+                        Margin="0,0,10,0">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
+                            <Setter Property="Content" Value="CONNECT"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsConnecting}" Value="True">
+                                    <Setter Property="Content" Value="CONNECTING..."/>
+                                    <Setter Property="Background" Value="#1E293B"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
                 <Button Content="DISCONNECT"
                         Command="{Binding DisconnectCommand}"
                         AutomationProperties.AutomationId="DisconnectButton"

@@ -1,6 +1,7 @@
 using System.IO;
 using System.Buffers.Binary;
 using System.Collections.ObjectModel;
+using System.Collections.Concurrent;
 using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -9,11 +10,13 @@ using Microsoft.Maui.Controls;
 using Microsoft.Maui.Dispatching;
 using XRaySystem.Application.UseCases;
 using XRaySystem.Application.DTOs;
+using XRaySystem.Contracts;
 using XRaySystem.Domain.Entities;
 using XRaySystem.Domain.Interfaces;
 using XRaySystem.Domain.ValueObjects;
 using XRaySystem.Domain.WindowLevel;
 using XRaySystem.Infrastructure.Concurrency;
+using XRaySystem.Infrastructure.Persistence;
 using XRaySystem.Mobile.Services;
 using XRaySystem.RemoteClient;
 
@@ -29,11 +32,17 @@ public partial class MainViewModel : ObservableObject
     private readonly SnapMeasurementUseCase _snapMeasurement;
     private readonly SaveMeasurementUseCase _saveMeasurement;
     private readonly GetMeasurementHistoryUseCase _getHistory;
+    private readonly BoundedMeasurementFileCache _historyCache;
     private readonly MauiImageStorageService _imageStorage;
     private readonly MauiWindowLevelRenderer _renderer;
     private readonly MobileSensorModeSettings _sensorModeSettings;
     private readonly DatabaseInitializationState _databaseInitialization;
     private readonly SensorRuntimeOptions _activeRuntime;
+    private readonly IRemoteDeviceClient? _remoteDeviceClient;
+    private readonly SemaphoreSlim _historyRefreshLock = new(1, 1);
+    private readonly SemaphoreSlim _remoteHistorySyncLock = new(1, 1);
+    private readonly ConcurrentDictionary<Guid, RemoteImageMetadataContract> _remoteHistoryMetadata = new();
+    private readonly ConcurrentQueue<Guid> _pendingRemoteHistoryImageIds = new();
 
     private CancellationTokenSource? _snapCts;
     private RawGray16Frame? _currentRawFrame;
@@ -43,6 +52,7 @@ public partial class MainViewModel : ObservableObject
     private long _lastFrameUtcTicks;
     private IDispatcherTimer? _frameFreshnessTimer;
     private bool _historyInitialized;
+    private int _remoteHistoryRefreshScheduled;
 
     public event Action? ReviewImageOpened;
     public event Action<byte[], int, int>? PresentationFrameReady;
@@ -260,21 +270,25 @@ public partial class MainViewModel : ObservableObject
         SnapMeasurementUseCase snapMeasurement,
         SaveMeasurementUseCase saveMeasurement,
         GetMeasurementHistoryUseCase getHistory,
+        BoundedMeasurementFileCache historyCache,
         MauiImageStorageService imageStorage,
         MauiWindowLevelRenderer renderer,
         MobileSensorModeSettings sensorModeSettings,
         DatabaseInitializationState databaseInitialization,
-        SensorRuntimeOptions activeRuntime)
+        SensorRuntimeOptions activeRuntime,
+        IRemoteDeviceClient? remoteDeviceClient = null)
     {
         _sensorService = sensorService;
         _snapMeasurement = snapMeasurement;
         _saveMeasurement = saveMeasurement;
         _getHistory = getHistory;
+        _historyCache = historyCache;
         _imageStorage = imageStorage;
         _renderer = renderer;
         _sensorModeSettings = sensorModeSettings;
         _databaseInitialization = databaseInitialization;
         _activeRuntime = activeRuntime;
+        _remoteDeviceClient = remoteDeviceClient;
         _renderWorker = new LatestValueWorker<RenderRequest>(
             ProcessRenderRequest,
             ReportRenderFailure);
@@ -289,6 +303,8 @@ public partial class MainViewModel : ObservableObject
         _sensorService.MeasurementReceived += measurement => AcceptMeasurement(measurement, queueRender: true);
         if (_sensorService is IAcquisitionCoordinator coordinator)
             coordinator.HardwareStateChanged += OnHardwareStateChanged;
+        if (_remoteDeviceClient is not null)
+            _remoteDeviceClient.FrameReadyReceived += OnRemoteFrameReady;
     }
 
     private bool CanConnect() => !IsBusy && Status == DeviceStatus.Disconnected;
@@ -433,7 +449,21 @@ public partial class MainViewModel : ObservableObject
             StatusMessage = "The local history database could not be initialized; saving and history are unavailable.";
             return;
         }
-        await RefreshHistoryAsync();
+        try
+        {
+            await _historyCache.EnforceAsync(keepCount: 30);
+            await _historyCache.ReconcileAsync();
+        }
+        catch (Exception ex)
+        {
+            // A damaged or temporarily locked cache must not prevent the control
+            // surface from opening. The reconciliation is retryable and never
+            // affects the authoritative DeviceHost archive.
+            System.Diagnostics.Debug.WriteLine($"Mobile cache reconciliation error: {ex.Message}");
+        }
+        await RefreshHistoryCoreAsync(synchronizeRemote: false);
+        if (_remoteDeviceClient is not null)
+            _ = RefreshRemoteHistoryAfterStartupAsync();
     }
 
     public async Task HandleWindowStoppedAsync()
@@ -463,6 +493,8 @@ public partial class MainViewModel : ObservableObject
         _frameFreshnessTimer?.Stop();
         if (_sensorService is IAcquisitionCoordinator coordinator)
             coordinator.HardwareStateChanged -= OnHardwareStateChanged;
+        if (_remoteDeviceClient is not null)
+            _remoteDeviceClient.FrameReadyReceived -= OnRemoteFrameReady;
         if (Status == DeviceStatus.Disconnected)
             return;
 
@@ -636,16 +668,30 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task RefreshHistoryAsync()
+    private Task RefreshHistoryAsync() => RefreshHistoryCoreAsync(synchronizeRemote: true);
+
+    private async Task RefreshHistoryCoreAsync(bool synchronizeRemote)
     {
-        if (IsHistoryLoading) return;
+        await _historyRefreshLock.WaitAsync();
         IsHistoryLoading = true;
         try
         {
             await _databaseInitialization.EnsureInitializedAsync();
             if (!_databaseInitialization.IsReady)
                 throw new InvalidOperationException("Local history storage is unavailable.");
-            var items = (await _getHistory.ExecuteAsync(maximumCount: 50))
+            if (synchronizeRemote && _remoteDeviceClient is not null)
+            {
+                try
+                {
+                    await SynchronizeRemoteHistoryAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Remote history sync error: {ex.Message}");
+                }
+            }
+            await _historyCache.EnforceAsync(keepCount: 30);
+            var items = (await _getHistory.ExecuteAsync(maximumCount: 30))
                 .Where(item =>
                     (!string.IsNullOrWhiteSpace(item.RawImagePath) && File.Exists(item.RawImagePath)) ||
                     (!string.IsNullOrWhiteSpace(item.ImagePath) &&
@@ -665,6 +711,116 @@ public partial class MainViewModel : ObservableObject
         finally
         {
             IsHistoryLoading = false;
+            _historyRefreshLock.Release();
+        }
+    }
+
+    private async Task RefreshRemoteHistoryAfterStartupAsync()
+    {
+        try
+        {
+            await Task.Yield();
+            await RefreshHistoryCoreAsync(synchronizeRemote: true);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Startup remote history sync error: {ex.Message}");
+        }
+    }
+
+    private void OnRemoteFrameReady(FrameReadyEventContract frame)
+    {
+        if (frame.Operation != AcquisitionOperationContract.Snap || frame.ImageId is null)
+            return;
+        _pendingRemoteHistoryImageIds.Enqueue(frame.ImageId.Value);
+        ScheduleRemoteHistoryRefresh();
+    }
+
+    private void ScheduleRemoteHistoryRefresh()
+    {
+        if (Interlocked.Exchange(ref _remoteHistoryRefreshScheduled, 1) != 0)
+            return;
+        _ = RefreshAfterRemoteFrameAsync();
+    }
+
+    private async Task RefreshAfterRemoteFrameAsync()
+    {
+        try
+        {
+            // The initiating client may still be completing its own verified local
+            // write. A short debounce lets that transaction win and avoids duplicate files.
+            await Task.Delay(300);
+            while (true)
+            {
+                while (_pendingRemoteHistoryImageIds.TryDequeue(out _)) { }
+                while (IsBusy) await Task.Delay(100);
+                await RefreshHistoryCoreAsync(synchronizeRemote: true);
+                if (_pendingRemoteHistoryImageIds.IsEmpty) break;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"FrameReady history refresh error: {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _remoteHistoryRefreshScheduled, 0);
+            if (!_pendingRemoteHistoryImageIds.IsEmpty)
+                ScheduleRemoteHistoryRefresh();
+        }
+    }
+
+    private async Task SynchronizeRemoteHistoryAsync(CancellationToken cancellationToken = default)
+    {
+        if (_remoteDeviceClient is null) return;
+        await _remoteHistorySyncLock.WaitAsync(cancellationToken);
+        try
+        {
+            var remoteItems = (await _remoteDeviceClient
+                    .GetImagesAsync(30, cancellationToken)
+                    .ConfigureAwait(false))
+                .OrderByDescending(item => item.CapturedAtUtc)
+                .Take(30)
+                .ToArray();
+            _remoteHistoryMetadata.Clear();
+            foreach (var metadata in remoteItems)
+                _remoteHistoryMetadata[metadata.ImageId] = metadata;
+            var localIds = (await _getHistory.ExecuteAsync(maximumCount: 30))
+                .Select(item => item.Id)
+                .ToHashSet();
+
+            foreach (var metadata in remoteItems)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (localIds.Contains(metadata.ImageId)) continue;
+                if (!metadata.LowAvailable)
+                    throw new InvalidDataException(
+                        $"DeviceHost catalog entry {metadata.ImageId:D} is missing its LOW preview.");
+                var lowBytes = await _remoteDeviceClient
+                    .GetLowImageAsync(metadata.ImageId, cancellationToken)
+                    .ConfigureAwait(false);
+                var (lowWidth, lowHeight) = ReadBmpDimensions(lowBytes);
+                if (lowWidth <= 0 || lowHeight <= 0 ||
+                    lowWidth != metadata.LowWidth || lowHeight != metadata.LowHeight)
+                    throw new InvalidDataException(
+                        $"DeviceHost LOW preview dimensions do not match catalog entry {metadata.ImageId:D}.");
+
+                var measurement = RemoteImageMeasurementFactory.CreateCatalogEntry(metadata);
+                var fileStem = AcquisitionFileNameFactory.CreateStem(measurement);
+                var previewPath = await Task.Run(
+                    () => _imageStorage.SaveRemotePreview(
+                        lowBytes,
+                        fileStem,
+                        measurement.AcquisitionId),
+                    cancellationToken);
+                measurement.SetImagePath(previewPath);
+                await _saveMeasurement.ExecuteIfMissingAsync(measurement);
+                localIds.Add(metadata.ImageId);
+            }
+        }
+        finally
+        {
+            _remoteHistorySyncLock.Release();
         }
     }
 
@@ -687,6 +843,31 @@ public partial class MainViewModel : ObservableObject
 
             StatusMessage = "Verifying and opening the history image...";
             var hasRaw = !string.IsNullOrWhiteSpace(item.RawImagePath) && File.Exists(item.RawImagePath);
+            string? rawDownloadWarning = null;
+            if (!hasRaw &&
+                _remoteDeviceClient is not null &&
+                _remoteHistoryMetadata.TryGetValue(item.Id, out var remoteMetadata) &&
+                remoteMetadata.RawAvailable &&
+                !string.IsNullOrWhiteSpace(item.ImagePath) &&
+                File.Exists(item.ImagePath))
+            {
+                try
+                {
+                    StatusMessage = "Downloading and verifying the full Gray16 source...";
+                    var rawBytes = await _remoteDeviceClient.GetRawImageAsync(item.Id);
+                    var measurement = RemoteImageMeasurementFactory.Create(remoteMetadata, rawBytes);
+                    var rawPath = await Task.Run(() =>
+                        _imageStorage.SaveRemoteRaw(measurement.Frame!, item.ImagePath!));
+                    await _saveMeasurement.UpdateRawImagePathAsync(item.Id, rawPath);
+                    item.RawImagePath = rawPath;
+                    hasRaw = true;
+                }
+                catch (Exception ex)
+                {
+                    rawDownloadWarning = ex.Message;
+                    System.Diagnostics.Debug.WriteLine($"On-demand RAW download error: {ex.Message}");
+                }
+            }
             if (hasRaw)
             {
                 var frame = await Task.Run(() => _imageStorage.LoadRaw(item.RawImagePath!));
@@ -722,7 +903,9 @@ public partial class MainViewModel : ObservableObject
             AutoWindowLevelCommand.NotifyCanExecuteChanged();
             ResetWindowLevelCommand.NotifyCanExecuteChanged();
             var openedPath = hasRaw ? item.RawImagePath : item.ImagePath;
-            StatusMessage = $"History image opened · {Path.GetFileName(openedPath)}";
+            StatusMessage = rawDownloadWarning is null
+                ? $"History image opened · {Path.GetFileName(openedPath)}"
+                : $"LOW preview opened; full RAW is temporarily unavailable: {rawDownloadWarning}";
             MainThread.BeginInvokeOnMainThread(() => ReviewImageOpened?.Invoke());
         }
         catch (Exception ex)

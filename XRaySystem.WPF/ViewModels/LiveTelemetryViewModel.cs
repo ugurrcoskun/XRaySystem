@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Threading.Tasks;
 using System.Threading;
@@ -12,6 +13,9 @@ using XRaySystem.Domain.Interfaces;
 using XRaySystem.Domain.ValueObjects;
 using XRaySystem.WPF.Services;
 using XRaySystem.Domain.WindowLevel;
+using XRaySystem.Contracts;
+using XRaySystem.Infrastructure.Storage;
+using XRaySystem.RemoteClient;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -29,7 +33,10 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private readonly ResumeLiveUseCase _resumeLiveUseCase;
     private readonly IImageStorageService _imageStorageService;
     private readonly WindowLevelRenderer _windowLevelRenderer;
+    private readonly IRemoteDeviceClient? _remoteDeviceClient;
     private readonly SemaphoreSlim _historyLoadLock = new(1, 1);
+    private int _remoteHistoryRefreshScheduled;
+    private readonly ConcurrentQueue<Guid> _pendingRemoteHistoryImageIds = new();
     private int _sessionGeneration;
     private PendingMeasurement? _pendingLiveMeasurement;
     private int _liveDispatchScheduled;
@@ -163,7 +170,8 @@ public partial class LiveTelemetryViewModel : ObservableObject
         SnapMeasurementUseCase snapMeasurementUseCase,
         ResumeLiveUseCase resumeLiveUseCase,
         IImageStorageService imageStorageService,
-        WindowLevelRenderer windowLevelRenderer)
+        WindowLevelRenderer windowLevelRenderer,
+        IRemoteDeviceClient? remoteDeviceClient = null)
     {
         _sensorService = sensorService;
         _startCaptureUseCase = startCaptureUseCase;
@@ -174,11 +182,14 @@ public partial class LiveTelemetryViewModel : ObservableObject
         _resumeLiveUseCase = resumeLiveUseCase;
         _imageStorageService = imageStorageService;
         _windowLevelRenderer = windowLevelRenderer;
+        _remoteDeviceClient = remoteDeviceClient;
 
         _sensorService.StatusChanged += OnDeviceStatusChanged;
         _sensorService.MeasurementReceived += QueueLatestMeasurement;
         if (_sensorService is IAcquisitionCoordinator coordinator)
             coordinator.HardwareStateChanged += OnHardwareStateChanged;
+        if (_remoteDeviceClient is not null)
+            _remoteDeviceClient.FrameReadyReceived += OnRemoteFrameReady;
         _frameFreshnessTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromSeconds(1)
@@ -186,6 +197,72 @@ public partial class LiveTelemetryViewModel : ObservableObject
         _frameFreshnessTimer.Tick += (_, _) => UpdateFrameFreshness();
         _frameFreshnessTimer.Start();
         ApplyAcquisitionParametersIfValid();
+    }
+
+    private void OnRemoteFrameReady(FrameReadyEventContract frame)
+    {
+        if (frame.Operation != AcquisitionOperationContract.Snap || frame.ImageId is null) return;
+        _pendingRemoteHistoryImageIds.Enqueue(frame.ImageId.Value);
+        ScheduleRemoteHistoryRefresh();
+    }
+
+    private void ScheduleRemoteHistoryRefresh()
+    {
+        if (Interlocked.CompareExchange(ref _remoteHistoryRefreshScheduled, 1, 0) != 0) return;
+        _ = RefreshRemoteHistoryAfterCommitAsync();
+    }
+
+    private async Task RefreshRemoteHistoryAfterCommitAsync()
+    {
+        try
+        {
+            await Task.Delay(100).ConfigureAwait(false);
+            if (_remoteDeviceClient is null) return;
+            var processed = new HashSet<Guid>();
+            while (_pendingRemoteHistoryImageIds.TryDequeue(out var imageId))
+            {
+                if (!processed.Add(imageId)) continue;
+                var metadata = await _remoteDeviceClient
+                    .GetImageAsync(imageId)
+                    .ConfigureAwait(false);
+                var item = CreateRemoteHistoryDto(metadata);
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    var existing = ImageHistory.FirstOrDefault(candidate => candidate.Id == item.Id);
+                    if (existing is not null &&
+                        !string.IsNullOrWhiteSpace(existing.ImagePath) &&
+                        File.Exists(existing.ImagePath))
+                        return;
+                    if (existing is not null) ImageHistory.Remove(existing);
+                    var insertAt = 0;
+                    while (insertAt < ImageHistory.Count &&
+                           ImageHistory[insertAt].Timestamp > item.Timestamp)
+                        insertAt++;
+                    ImageHistory.Insert(insertAt, item);
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Remote history refresh error: {ex.Message}");
+            try
+            {
+                // A transient failure after dequeuing an event must not leave the
+                // desktop catalog stale. The full merge is slower, so it is used
+                // only as a recovery path.
+                await RefreshHistoryAsync().ConfigureAwait(false);
+            }
+            catch (Exception recoveryException)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Remote history recovery refresh error: {recoveryException.Message}");
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _remoteHistoryRefreshScheduled, 0);
+            if (!_pendingRemoteHistoryImageIds.IsEmpty) ScheduleRemoteHistoryRefresh();
+        }
     }
 
     private void OnHardwareStateChanged(AcquisitionHardwareState state)
@@ -642,7 +719,11 @@ public partial class LiveTelemetryViewModel : ObservableObject
             var dto = _processTelemetryUseCase.Execute(measurement);
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                ImageHistory.Insert(0, dto)); // En yeni üstte
+            {
+                var existing = ImageHistory.FirstOrDefault(item => item.Id == dto.Id);
+                if (existing is not null) ImageHistory.Remove(existing);
+                ImageHistory.Insert(0, dto); // En yeni üstte
+            });
         }
         catch (Exception ex)
         {
@@ -777,24 +858,40 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [RelayCommand]
     private async Task RefreshHistoryAsync()
     {
-        var generation = Interlocked.Increment(ref _sessionGeneration);
         await _historyLoadLock.WaitAsync();
         try
         {
             await App.DatabaseReady;
-            var history = await _getHistoryUseCase.ExecuteAsync(maximumCount: 200);
-            if (generation != Volatile.Read(ref _sessionGeneration)) return;
+            var localHistory = await _getHistoryUseCase.ExecuteAsync(maximumCount: 500);
+            IReadOnlyList<RemoteImageMetadataContract> remoteHistory = [];
+            if (_remoteDeviceClient is not null)
+            {
+                try
+                {
+                    remoteHistory = await _remoteDeviceClient.GetImagesAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Remote catalog load error: {ex.Message}");
+                }
+            }
+
+            var merged = remoteHistory
+                .Select(CreateRemoteHistoryDto)
+                .ToDictionary(item => item.Id);
+            foreach (var local in localHistory)
+                merged[local.Id] = local;
+            var history = merged.Values
+                .OrderByDescending(item => item.Timestamp)
+                .ToArray();
             
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
                 ImageHistory.Clear();
                 foreach (var item in history)
                 {
-                    // Diskte resmi kaydedilmiş tüm çekimleri ImageHistory listesine ekle
-                    if (!string.IsNullOrEmpty(item.ImagePath))
-                    {
+                    if (!string.IsNullOrWhiteSpace(item.ImagePath) || _remoteDeviceClient is not null)
                         ImageHistory.Add(item);
-                    }
                 }
             });
         }
@@ -813,4 +910,124 @@ public partial class LiveTelemetryViewModel : ObservableObject
             _historyLoadLock.Release();
         }
     }
+
+    public async Task<string?> EnsureRemoteHistoryAvailableAsync(SensorDataDto item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        if (!string.IsNullOrWhiteSpace(item.ImagePath) && File.Exists(item.ImagePath))
+            return item.ImagePath;
+        if (_remoteDeviceClient is null)
+            return null;
+
+        var rawBytes = await _remoteDeviceClient.GetRawImageAsync(item.Id).ConfigureAwait(false);
+        RawGray16Frame frame;
+        using (var stream = new MemoryStream(rawBytes, writable: false))
+            frame = Gray16RawFileCodec.Read(stream);
+        if (frame.AcquisitionId != item.AcquisitionId ||
+            frame.Width != item.SourceWidth || frame.Height != item.SourceHeight)
+            throw new InvalidDataException("Remote history RAW metadata does not match the catalog entry.");
+
+        var requested = item.RequestedParameters ?? new AcquisitionParameters(
+            item.Voltage,
+            item.PowerW,
+            item.ExposureTime);
+        requested.EnsureValid();
+        var tubeCurrent = item.Voltage > 0 ? item.PowerW / item.Voltage : 0;
+        var measurement = new XRayMeasurement(
+            item.Id,
+            item.Timestamp.ToUniversalTime(),
+            new SensorReadings(
+                tubeCurrent,
+                item.Voltage,
+                item.XRayIntensity,
+                item.ExposureTime,
+                item.TubeCurrentProvenance,
+                item.VoltageProvenance,
+                item.ExposureTimeProvenance),
+            frame,
+            item.IsSimulator,
+            requested);
+
+        var bitmap = await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var source = BitmapSource.Create(
+                frame.Width,
+                frame.Height,
+                96,
+                96,
+                System.Windows.Media.PixelFormats.Gray16,
+                null,
+                frame.Pixels,
+                frame.StrideBytes);
+            source.Freeze();
+            return source;
+        });
+        var fileStem = AcquisitionFileNameFactory.CreateStem(measurement);
+        var saved = await Task.Run(() =>
+            _imageStorageService.SaveSnapshot(bitmap, frame, fileStem)).ConfigureAwait(false);
+        measurement.SetImagePath(saved.PreviewPath);
+        measurement.SetRawImagePath(saved.RawPath);
+        try
+        {
+            await _saveMeasurementUseCase.ExecuteIfMissingAsync(measurement).ConfigureAwait(false);
+        }
+        catch
+        {
+            // A simultaneous local SNAP may have inserted the same measurement.
+            // The verified files remain usable and the next refresh resolves the local row.
+        }
+
+        item.ImagePath = saved.PreviewPath;
+        item.RawImagePath = saved.RawPath;
+        return saved.PreviewPath;
+    }
+
+    private static SensorDataDto CreateRemoteHistoryDto(RemoteImageMetadataContract metadata)
+    {
+        var profile = Enum.TryParse<AcquisitionProfile>(metadata.Profile, true, out var parsedProfile) &&
+                      Enum.IsDefined(parsedProfile)
+            ? parsedProfile
+            : AcquisitionProfile.IndustrialQaPhantom;
+        return new SensorDataDto
+        {
+            Id = metadata.ImageId,
+            Timestamp = metadata.CapturedAtUtc.LocalDateTime,
+            PowerW = metadata.MeasuredTelemetry.PowerW,
+            Voltage = metadata.MeasuredTelemetry.VoltageKv,
+            XRayIntensity = metadata.MeasuredTelemetry.XRayIntensity,
+            ExposureTime = metadata.MeasuredTelemetry.ExposureTimeMs,
+            Profile = profile,
+            IsSimulator = metadata.IsSimulator == true,
+            RequestedParameters = new AcquisitionParameters(
+                metadata.RequestedParameters.VoltageKv,
+                metadata.RequestedParameters.PowerW,
+                metadata.RequestedParameters.ExposureTimeMs),
+            AcquisitionId = metadata.AcquisitionId,
+            Operation = metadata.Operation == AcquisitionOperationContract.Snap
+                ? AcquisitionOperation.Snap
+                : AcquisitionOperation.Grab,
+            SnapFrameMode = metadata.SnapFrameMode == SnapFrameModeContract.Low
+                ? SnapFrameMode.Low
+                : SnapFrameMode.Raw,
+            SourceWidth = metadata.Width,
+            SourceHeight = metadata.Height,
+            SourceMarker = metadata.IsSimulator switch
+            {
+                true => "remote-device-catalog:simulation",
+                false => "remote-device-catalog:device",
+                null => null
+            },
+            VoltageProvenance = ToDomain(metadata.MeasuredTelemetry.VoltageProvenance),
+            TubeCurrentProvenance = ToDomain(metadata.MeasuredTelemetry.TubeCurrentProvenance),
+            ExposureTimeProvenance = ToDomain(metadata.MeasuredTelemetry.ExposureTimeProvenance)
+        };
+    }
+
+    private static MeasurementProvenance ToDomain(MeasurementProvenanceContract provenance) => provenance switch
+    {
+        MeasurementProvenanceContract.Measured => MeasurementProvenance.Measured,
+        MeasurementProvenanceContract.AppliedTarget => MeasurementProvenance.AppliedTarget,
+        MeasurementProvenanceContract.Derived => MeasurementProvenance.Derived,
+        _ => MeasurementProvenance.Unknown
+    };
 }

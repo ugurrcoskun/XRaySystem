@@ -334,11 +334,14 @@ public sealed class DeviceCoordinatorTests
             publisher);
         var command = Command();
 
-        await coordinator.SnapAsync(command, CancellationToken.None);
+        var snap = await coordinator.SnapAsync(command, CancellationToken.None);
 
         Assert.Equal([0, 20, 60, 75, 85, 90, 100], publisher.Progress.Select(item => item.Percent));
         Assert.All(publisher.Progress, item => Assert.Equal(command.CommandId, item.CommandId));
         Assert.Equal("completed", publisher.Progress[^1].Stage);
+        var frameReady = Assert.Single(publisher.Frames);
+        Assert.Equal(snap.Image.ImageId, frameReady.ImageId);
+        Assert.Equal(snap.Image.AcquisitionId, frameReady.AcquisitionId);
         Assert.Empty(publisher.Errors);
     }
 
@@ -394,6 +397,54 @@ public sealed class DeviceCoordinatorTests
                 NullLogger<DeviceArchiveRecoveryService>.Instance);
             await recoveryService.StartAsync(CancellationToken.None);
             Assert.Equal(snap.Image.ImageId, Assert.Single(recoveredBuffer.GetMetadata()).ImageId);
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Durable_catalog_keeps_all_verified_snapshots_after_transfer_buffer_eviction()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "xray-device-catalog-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var archive = new DeviceAcquisitionArchive(
+                new DeviceAcquisitionArchiveOptions(true, folder),
+                NullLogger<DeviceAcquisitionArchive>.Instance);
+            var buffer = new RemoteImageBuffer(new RemoteImageBufferOptions(
+                ImageLimit: 1,
+                MaxBytes: 32L * 1024 * 1024,
+                TimeToLive: null));
+            using var coordinator = new DeviceCoordinator(
+                new TestSensor(),
+                new DeviceHostOptions("test-device", IsSimulator: true),
+                buffer,
+                acquisitionArchive: archive);
+            await coordinator.ConnectAsync(Command(), CancellationToken.None);
+
+            var first = await coordinator.SnapAsync(Command(), CancellationToken.None);
+            var second = await coordinator.SnapAsync(Command(), CancellationToken.None);
+
+            Assert.Equal(second.Image.ImageId, Assert.Single(buffer.GetMetadata()).ImageId);
+            var catalog = archive.GetMetadataPage(skip: 0, take: 10);
+            Assert.Equal(2, catalog.Count);
+            Assert.Contains(catalog, image => image.ImageId == first.Image.ImageId);
+            Assert.Contains(catalog, image => image.ImageId == second.Image.ImageId);
+            Assert.True(archive.TryLoad(first.Image.ImageId, out var restored));
+            Assert.NotNull(restored);
+            Assert.Equal(first.Image.AcquisitionId, restored.Frame.AcquisitionId);
+
+            var restartedArchive = new DeviceAcquisitionArchive(
+                new DeviceAcquisitionArchiveOptions(true, folder),
+                NullLogger<DeviceAcquisitionArchive>.Instance);
+            var rebuiltCatalog = restartedArchive.GetMetadataPage(skip: 0, take: 10);
+            Assert.Equal(2, rebuiltCatalog.Count);
+            Assert.Contains(rebuiltCatalog, image => image.ImageId == first.Image.ImageId);
+            Assert.Contains(rebuiltCatalog, image => image.ImageId == second.Image.ImageId);
+            Assert.True(restartedArchive.TryLoad(first.Image.ImageId, out var restartedImage));
+            Assert.Equal(first.Image.AcquisitionId, restartedImage!.Frame.AcquisitionId);
         }
         finally
         {
@@ -536,6 +587,7 @@ public sealed class DeviceCoordinatorTests
     private sealed class TrackingEventPublisher : IDeviceEventPublisher
     {
         public List<SnapProgressEventContract> Progress { get; } = [];
+        public List<FrameReadyEventContract> Frames { get; } = [];
         public List<DeviceErrorEventContract> Errors { get; } = [];
 
         public Task PublishSnapProgressAsync(
@@ -543,6 +595,14 @@ public sealed class DeviceCoordinatorTests
             CancellationToken cancellationToken)
         {
             Progress.Add(progress);
+            return Task.CompletedTask;
+        }
+
+        public Task PublishFrameReadyAsync(
+            FrameReadyEventContract frame,
+            CancellationToken cancellationToken)
+        {
+            Frames.Add(frame);
             return Task.CompletedTask;
         }
 

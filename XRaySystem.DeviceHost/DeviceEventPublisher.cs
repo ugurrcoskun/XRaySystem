@@ -6,6 +6,7 @@ namespace XRaySystem.DeviceHost;
 public interface IDeviceEventPublisher
 {
     Task PublishSnapProgressAsync(SnapProgressEventContract progress, CancellationToken cancellationToken);
+    Task PublishFrameReadyAsync(FrameReadyEventContract frame, CancellationToken cancellationToken);
     Task PublishErrorAsync(DeviceErrorEventContract error, CancellationToken cancellationToken);
 }
 
@@ -15,6 +16,11 @@ public sealed class SignalRDeviceEventPublisher(IHubContext<DeviceEventsHub> hub
         SnapProgressEventContract progress,
         CancellationToken cancellationToken) =>
         hub.Clients.All.SendAsync(DeviceEventNames.SnapProgress, progress, cancellationToken);
+
+    public Task PublishFrameReadyAsync(
+        FrameReadyEventContract frame,
+        CancellationToken cancellationToken) =>
+        hub.Clients.All.SendAsync(DeviceEventNames.FrameReady, frame, cancellationToken);
 
     public Task PublishErrorAsync(
         DeviceErrorEventContract error,
@@ -30,6 +36,10 @@ internal sealed class NullDeviceEventPublisher : IDeviceEventPublisher
 
     public Task PublishSnapProgressAsync(
         SnapProgressEventContract progress,
+        CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task PublishFrameReadyAsync(
+        FrameReadyEventContract frame,
         CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task PublishErrorAsync(

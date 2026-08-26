@@ -44,6 +44,72 @@ public sealed class RemoteDeviceClientTests
     }
 
     [Fact]
+    public async Task Single_image_metadata_query_uses_the_targeted_catalog_route()
+    {
+        var imageId = Guid.NewGuid();
+        var acquisitionId = Guid.NewGuid();
+        var metadata = new RemoteImageMetadataContract(
+            imageId,
+            acquisitionId,
+            "Snap",
+            2,
+            2,
+            4,
+            "Gray16LittleEndian",
+            2,
+            2,
+            DateTimeOffset.UtcNow,
+            "IndustrialQaPhantom",
+            new AcquisitionParametersContract(70, 210, 10),
+            new MeasuredTelemetryContract(70, 3, 210, 1, 10),
+            true,
+            true);
+        string? requestedPath = null;
+        var handler = new StubHandler((request, _) =>
+        {
+            requestedPath = request.RequestUri!.PathAndQuery;
+            return Task.FromResult(JsonResponse(metadata));
+        });
+        using var httpClient = new HttpClient(handler);
+        await using var client = new RemoteDeviceClient(
+            httpClient,
+            new RemoteDeviceClientOptions(new Uri("http://localhost:5088"), "mock-01"));
+
+        var result = await client.GetImageAsync(imageId);
+
+        Assert.Equal(imageId, result.ImageId);
+        Assert.Equal($"/api/devices/mock-01/images/{imageId:D}", requestedPath);
+    }
+
+    [Fact]
+    public async Task Image_catalog_uses_cursor_pages_without_offset_gaps()
+    {
+        var first = CreateImageMetadata(DateTimeOffset.UtcNow);
+        var second = CreateImageMetadata(first.CapturedAtUtc.AddSeconds(-1));
+        var requestedPaths = new List<string>();
+        var handler = new StubHandler((request, _) =>
+        {
+            requestedPaths.Add(request.RequestUri!.PathAndQuery);
+            var hasCursor = request.RequestUri.Query.Contains("cursor=next-page", StringComparison.Ordinal);
+            var page = hasCursor
+                ? new RemoteImageCatalogPageContract([second], null)
+                : new RemoteImageCatalogPageContract([first], "next-page");
+            return Task.FromResult(JsonResponse(page));
+        });
+        using var httpClient = new HttpClient(handler);
+        await using var client = new RemoteDeviceClient(
+            httpClient,
+            new RemoteDeviceClientOptions(new Uri("http://localhost:5088"), "mock-01"));
+
+        var images = await client.GetImagesAsync(2);
+
+        Assert.Equal([first.ImageId, second.ImageId], images.Select(item => item.ImageId));
+        Assert.Equal(2, requestedPaths.Count);
+        Assert.Equal("/api/devices/mock-01/images/page?take=2", requestedPaths[0]);
+        Assert.Contains("cursor=next-page", requestedPaths[1]);
+    }
+
+    [Fact]
     public async Task Grab_freeze_abort_and_snap_mode_use_the_new_protocol_routes()
     {
         var requests = new List<(string Path, string Body)>();
@@ -252,6 +318,23 @@ public sealed class RemoteDeviceClientTests
         new AcquisitionParametersContract(70, 3500, 10),
         1,
         DateTimeOffset.UtcNow);
+
+    private static RemoteImageMetadataContract CreateImageMetadata(DateTimeOffset capturedAtUtc) => new(
+        Guid.NewGuid(),
+        Guid.NewGuid(),
+        "Snap",
+        2,
+        2,
+        4,
+        "Gray16LittleEndian",
+        2,
+        2,
+        capturedAtUtc,
+        "IndustrialQaPhantom",
+        new AcquisitionParametersContract(70, 210, 10),
+        new MeasuredTelemetryContract(70, 3, 210, 1, 10),
+        true,
+        true);
 
     private static TelemetryEventContract CreateTelemetry(long sequence) => new(
         "mock-01",

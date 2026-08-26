@@ -239,7 +239,9 @@ public sealed class DeviceCoordinator : IDisposable
 
     public async Task<SnapCommandResult> SnapAsync(
         SnapCommandRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? initiatedBySubject = null,
+        string? initiatedByClientId = null)
     {
         EnsureCommandId(request.CommandId);
         if (!Enum.IsDefined(request.FrameMode))
@@ -310,7 +312,10 @@ public sealed class DeviceCoordinator : IDisposable
                 LowAvailable: true,
                 RawAvailable: true,
                 AcquisitionOperationContract.Snap,
-                request.FrameMode);
+                request.FrameMode,
+                IsSimulator: _options.IsSimulator,
+                InitiatedBySubject: NormalizeInitiator(initiatedBySubject),
+                InitiatedByClientId: NormalizeInitiator(initiatedByClientId));
 
             await TryPublishSnapProgressAsync(request.CommandId, "persisting", 75).ConfigureAwait(false);
             var archiveReceipt = _acquisitionArchive.Save(measurement, image, lowPreview.Bytes);
@@ -319,6 +324,8 @@ public sealed class DeviceCoordinator : IDisposable
 
             await TryPublishSnapProgressAsync(request.CommandId, "buffering", 90).ConfigureAwait(false);
             _imageBuffer.Add(image, frame, lowPreview.Bytes);
+
+            await TryPublishFrameReadyAsync(image).ConfigureAwait(false);
 
             await TryPublishSnapProgressAsync(request.CommandId, "completed", 100).ConfigureAwait(false);
 
@@ -344,6 +351,15 @@ public sealed class DeviceCoordinator : IDisposable
         {
             if (lockTaken) _commandLock.Release();
         }
+    }
+
+    private static string? NormalizeInitiator(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var normalized = value.Trim();
+        if (normalized.Length > 128 || normalized.Any(char.IsControl))
+            throw new ArgumentException("Acquisition initiator en fazla 128 görünür karakter olabilir.");
+        return normalized;
     }
 
     private async Task<DeviceCommandResult> ExecuteAsync(
@@ -444,6 +460,29 @@ public sealed class DeviceCoordinator : IDisposable
         catch
         {
             // Event delivery must not make a device command fail.
+        }
+    }
+
+    private async Task TryPublishFrameReadyAsync(RemoteImageMetadataContract image)
+    {
+        try
+        {
+            await _eventPublisher.PublishFrameReadyAsync(
+                new FrameReadyEventContract(
+                    DeviceId,
+                    Interlocked.Increment(ref _sequenceNumber),
+                    image.AcquisitionId,
+                    image.Operation,
+                    image.Kind,
+                    image.Width,
+                    image.Height,
+                    image.CapturedAtUtc,
+                    image.ImageId),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Event delivery must not make an already persisted SNAP fail.
         }
     }
 

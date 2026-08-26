@@ -5,6 +5,8 @@ using XRaySystem.Domain.ValueObjects;
 using XRaySystem.Infrastructure.Sensors;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,6 +26,15 @@ builder.Services.AddHealthChecks()
     .AddCheck<DeviceHostStorageReadinessCheck>(
         "devicehost_durable_storage",
         tags: ["ready"]);
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    // Only a same-machine reverse proxy (for example cloudflared) may assert
+    // the external HTTPS scheme. Network clients cannot spoof this header.
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedProto;
+    options.KnownProxies.Add(IPAddress.Loopback);
+    options.KnownProxies.Add(IPAddress.IPv6Loopback);
+    options.ForwardLimit = 1;
+});
 builder.Services.AddSignalR();
 var apiRateLimitPermitCount = builder.Configuration.GetValue<int?>("RequestSecurity:RateLimitPermitCount") ?? 120;
 var apiRateLimitWindowSeconds = builder.Configuration.GetValue<int?>("RequestSecurity:RateLimitWindowSeconds") ?? 60;
@@ -112,7 +123,11 @@ var acquisitionArchiveOptions = new DeviceAcquisitionArchiveOptions(
     builder.Configuration.GetValue<bool?>("AcquisitionStorage:QuarantineIncompleteArtifacts") ?? true,
     builder.Configuration.GetValue<double?>("AcquisitionStorage:IncompleteArtifactGracePeriodMinutes") ?? 10);
 builder.Services.AddSingleton(acquisitionArchiveOptions);
-builder.Services.AddSingleton<IDeviceAcquisitionArchive, DeviceAcquisitionArchive>();
+builder.Services.AddSingleton<DeviceAcquisitionArchive>();
+builder.Services.AddSingleton<IDeviceAcquisitionArchive>(provider =>
+    provider.GetRequiredService<DeviceAcquisitionArchive>());
+builder.Services.AddSingleton<IDeviceAcquisitionCatalog>(provider =>
+    provider.GetRequiredService<IDeviceAcquisitionArchive>());
 var configuredAuditPath = builder.Configuration["AuditStorage:FilePath"];
 var auditPath = string.IsNullOrWhiteSpace(configuredAuditPath)
     ? Path.Combine(
@@ -159,6 +174,8 @@ builder.Services.AddHostedService<DeviceArchiveRecoveryService>();
 builder.Services.AddHostedService<SensorEventRelay>();
 
 var app = builder.Build();
+
+app.UseForwardedHeaders();
 
 var security = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<DeviceSecurityOptions>>().Value;
 var requireHttps = security.RequireHttps;

@@ -34,6 +34,9 @@ namespace XRaySystem.Mobile
             builder.Services.AddDbContext<XRayDbContext>(options =>
                 options.UseSqlite($"Data Source={mobileDatabasePath}"));
             builder.Services.AddScoped<IXRayMeasurementRepository, XRayMeasurementRepository>();
+            builder.Services.AddTransient(provider => new BoundedMeasurementFileCache(
+                provider.GetRequiredService<IXRayMeasurementRepository>(),
+                Path.Combine(FileSystem.AppDataDirectory, "Images")));
             builder.Services.AddSingleton<DatabaseInitializationState>();
 
             // Local varsayılandır. Android Emulator remote modda Windows hostuna 10.0.2.2 ile ulaşır.

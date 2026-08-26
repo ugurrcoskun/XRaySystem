@@ -24,6 +24,15 @@ public class MauiImageStorageService
         return new MobileSnapshotFiles(files.PreviewPath, files.RawPath);
     }
 
+    public string SaveRemotePreview(
+        byte[] previewBmp,
+        string fileStem,
+        Guid acquisitionId) =>
+        _storage.SavePreviewOnly(previewBmp, ".bmp", fileStem, acquisitionId).PreviewPath;
+
+    public string SaveRemoteRaw(RawGray16Frame rawFrame, string previewPath) =>
+        _storage.SaveRawBesidePreview(rawFrame, previewPath);
+
     public byte[] LoadBmp(string filePath)
     {
         return _storage.LoadPreview(filePath);

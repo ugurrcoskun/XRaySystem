@@ -68,8 +68,6 @@ namespace XRaySystem.WPF
         }
 
         private const double MainMinZoom = 1.0;
-        // Kullanıcıya görünür bir üst sınır yoktur; bu yalnız double/renderer taşmasını engeller.
-        private const double MainNumericSafetyZoom = 1_000_000.0;
         private double _mainScale = 1.0;
         private double _mainTransX = 0.0;
         private double _mainTransY = 0.0;
@@ -90,11 +88,11 @@ namespace XRaySystem.WPF
 
         private void MainApplyZoom(double factor, Point center, System.Windows.Controls.Border viewport)
         {
+            if (!double.IsFinite(factor) || factor <= 0) return;
             double oldScale = _mainScale;
             double requestedScale = oldScale * factor;
-            if (!double.IsFinite(requestedScale))
-                requestedScale = MainNumericSafetyZoom;
-            double newScale = Math.Clamp(requestedScale, MainMinZoom, MainNumericSafetyZoom);
+            if (!double.IsFinite(requestedScale)) return;
+            double newScale = Math.Max(requestedScale, MainMinZoom);
             if (Math.Abs(newScale - oldScale) < 1e-9) return;
 
             double originX = viewport.ActualWidth / 2.0;
@@ -102,9 +100,13 @@ namespace XRaySystem.WPF
             double imgX = (center.X - originX - _mainTransX) / oldScale + originX;
             double imgY = (center.Y - originY - _mainTransY) / oldScale + originY;
 
+            var nextTransX = center.X - originX - (imgX - originX) * newScale;
+            var nextTransY = center.Y - originY - (imgY - originY) * newScale;
+            if (!double.IsFinite(nextTransX) || !double.IsFinite(nextTransY)) return;
+
             _mainScale = newScale;
-            _mainTransX = center.X - originX - (imgX - originX) * newScale;
-            _mainTransY = center.Y - originY - (imgY - originY) * newScale;
+            _mainTransX = nextTransX;
+            _mainTransY = nextTransY;
 
             if (newScale <= MainMinZoom)
             {
@@ -200,7 +202,17 @@ namespace XRaySystem.WPF
             _mainIsPanning = false;
         }
 
-        private void UpdateZoomText() => ZoomPercentText.Text = $"{_mainScale * 100:0}%";
+        private void UpdateZoomText() => ZoomPercentText.Text = FormatZoomPercent(_mainScale);
+
+        private static string FormatZoomPercent(double scale)
+        {
+            var percent = scale * 100.0;
+            return double.IsFinite(percent)
+                ? percent < 1_000_000_000
+                    ? $"{percent:0}%"
+                    : $"{percent:0.###E+0}%"
+                : $"{scale:0.###E+0}×";
+        }
 
         private void ClampMainTranslation()
         {
@@ -277,6 +289,7 @@ namespace XRaySystem.WPF
             if (!int.TryParse(MainCoordinateXInput.Text, out var pixelX) ||
                 !int.TryParse(MainCoordinateYInput.Text, out var pixelY) ||
                 !double.TryParse(MainCoordinateZoomInput.Text, out var zoomPercent) ||
+                !double.IsFinite(zoomPercent) ||
                 pixelX < 0 || pixelX >= bitmap.PixelWidth ||
                 pixelY < 0 || pixelY >= bitmap.PixelHeight ||
                 zoomPercent < 100)
@@ -295,11 +308,20 @@ namespace XRaySystem.WPF
             var offsetY = (ImageLayer.ActualHeight - renderedHeight) / 2.0;
             var layerPointX = offsetX + (pixelX + 0.5) * fitScale;
             var layerPointY = offsetY + (pixelY + 0.5) * fitScale;
-            _mainScale = Math.Clamp(zoomPercent / 100.0, MainMinZoom, MainNumericSafetyZoom);
+            var requestedScale = zoomPercent / 100.0;
             var originX = XRayScanBorder.ActualWidth / 2.0;
             var originY = XRayScanBorder.ActualHeight / 2.0;
-            _mainTransX = -(layerPointX - originX) * _mainScale;
-            _mainTransY = -(layerPointY - originY) * _mainScale;
+            var nextTransX = -(layerPointX - originX) * requestedScale;
+            var nextTransY = -(layerPointY - originY) * requestedScale;
+            if (!double.IsFinite(requestedScale) ||
+                !double.IsFinite(nextTransX) || !double.IsFinite(nextTransY))
+            {
+                MainCoordinateValidationText.Text = "Zoom value is outside the numeric range.";
+                return;
+            }
+            _mainScale = Math.Max(requestedScale, MainMinZoom);
+            _mainTransX = nextTransX;
+            _mainTransY = nextTransY;
             MainCoordinateValidationText.Text = string.Empty;
             SyncMainTransforms();
         }
@@ -332,7 +354,7 @@ namespace XRaySystem.WPF
         /// History listesinden bir öğe seçildiğinde TIFF dosyasını diskten yükler ve ekrana basar.
         /// ViewModel'deki partial metot yerine bu event kullanılıyor – daha güvenilir.
         /// </summary>
-        private void ImageHistoryListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        private async void ImageHistoryListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (sender is not System.Windows.Controls.ListBox lb) return;
             if (lb.SelectedItem is not XRaySystem.Application.DTOs.SensorDataDto item) return;
@@ -340,15 +362,32 @@ namespace XRaySystem.WPF
             var vm = DataContext as ViewModels.LiveTelemetryViewModel;
             if (vm == null) return;
 
-            // Dosya yolu kontrolü
+            // Remote katalog kayıtları metadata olarak görünür; ilk açılışta doğrulanmış RAW
+            // DeviceHost'tan indirilip yerel WPF cache'ine atomik olarak kaydedilir.
             if (string.IsNullOrEmpty(item.ImagePath) || !System.IO.File.Exists(item.ImagePath))
             {
-                MessageBox.Show(
-                    $"Image file not found.\nRequested path: {item.ImagePath ?? "(empty)"}",
-                    "Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-                return;
+                try
+                {
+                    item.ImagePath = await vm.EnsureRemoteHistoryAvailableAsync(item);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        $"Unable to download the remote image:\n{ex.Message}",
+                        "Remote History Error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+                if (string.IsNullOrEmpty(item.ImagePath) || !System.IO.File.Exists(item.ImagePath))
+                {
+                    MessageBox.Show(
+                        "The image is not available locally or in the connected DeviceHost archive.",
+                        "Image Unavailable",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
             }
 
             try

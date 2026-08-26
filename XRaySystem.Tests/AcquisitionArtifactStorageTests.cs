@@ -61,6 +61,45 @@ public sealed class AcquisitionArtifactStorageTests
     }
 
     [Fact]
+    public void Preview_can_be_cached_first_and_verified_raw_added_on_demand()
+    {
+        InTemporaryFolder(folder =>
+        {
+            var storage = new AcquisitionArtifactStorage(folder);
+            var frame = Frame(Guid.NewGuid());
+
+            var preview = storage.SavePreviewOnly(Bmp(), ".bmp", "remote_preview", frame.AcquisitionId);
+
+            Assert.True(File.Exists(preview.PreviewPath));
+            Assert.Empty(Directory.GetFiles(folder, "*.xrayraw"));
+
+            var rawPath = storage.SaveRawBesidePreview(frame, preview.PreviewPath);
+            var repeatedPath = storage.SaveRawBesidePreview(frame, preview.PreviewPath);
+
+            Assert.Equal(rawPath, repeatedPath);
+            Assert.Equal(frame.AcquisitionId, storage.LoadRaw(rawPath).AcquisitionId);
+            Assert.Single(Directory.GetFiles(folder, "*.bmp"));
+            Assert.Single(Directory.GetFiles(folder, "*.xrayraw"));
+            Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
+        });
+    }
+
+    [Fact]
+    public void Existing_on_demand_raw_with_different_identity_is_rejected()
+    {
+        InTemporaryFolder(folder =>
+        {
+            var storage = new AcquisitionArtifactStorage(folder);
+            var original = Frame(Guid.NewGuid());
+            var preview = storage.SavePreviewOnly(Bmp(), ".bmp", "remote_preview", original.AcquisitionId);
+            storage.SaveRawBesidePreview(original, preview.PreviewPath);
+
+            Assert.Throws<InvalidDataException>(() =>
+                storage.SaveRawBesidePreview(Frame(Guid.NewGuid()), preview.PreviewPath));
+        });
+    }
+
+    [Fact]
     public void Load_rejects_paths_outside_the_configured_storage_root()
     {
         InTemporaryFolder(folder =>

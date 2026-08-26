@@ -18,6 +18,15 @@
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "LanDevelopment"
       }
+    },
+    "XRaySystem.DeviceHost - Cloudflare Tunnel": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://127.0.0.1:5088",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "TunnelDevelopment"
+      }
     }
   }
 }

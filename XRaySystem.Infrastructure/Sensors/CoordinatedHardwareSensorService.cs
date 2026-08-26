@@ -15,7 +15,7 @@ public sealed class CoordinatedHardwareSensorService : IAcquisitionCoordinator, 
     private readonly AcquisitionSafetyOptions _safety;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly object _stateGate = new();
-    private AcquisitionParameters _parameters = new(70, 3500, 500);
+    private AcquisitionParameters _parameters = new(70, 210, 500);
     private DeviceStatus _currentStatus = DeviceStatus.Disconnected;
     private AcquisitionCoordinatorState _coordinatorState = AcquisitionCoordinatorState.Disconnected;
     private CancellationTokenSource? _activeCancellation;

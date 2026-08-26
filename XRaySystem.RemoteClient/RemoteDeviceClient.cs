@@ -219,11 +219,38 @@ public sealed class RemoteDeviceClient : IRemoteDeviceClient, IAsyncDisposable
             cancellationToken);
     }
 
-    public Task<IReadOnlyList<RemoteImageMetadataContract>> GetImagesAsync(
+    public async Task<IReadOnlyList<RemoteImageMetadataContract>> GetImagesAsync(
         CancellationToken cancellationToken = default) =>
-        GetJsonAsync<IReadOnlyList<RemoteImageMetadataContract>>(
-            $"{DeviceRoute()}/images",
-            cancellationToken);
+        await GetImagesAsync(10_000, cancellationToken).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<RemoteImageMetadataContract>> GetImagesAsync(
+        int maximumCount,
+        CancellationToken cancellationToken = default)
+    {
+        if (maximumCount is < 1 or > 10_000)
+            throw new ArgumentOutOfRangeException(nameof(maximumCount));
+        const int pageSize = 100;
+        var images = new List<RemoteImageMetadataContract>();
+        var observedIds = new HashSet<Guid>();
+        string? cursor = null;
+        while (images.Count < maximumCount)
+        {
+            var requestedPageSize = Math.Min(pageSize, maximumCount - images.Count);
+            var cursorQuery = cursor is null
+                ? string.Empty
+                : $"&cursor={Uri.EscapeDataString(cursor)}";
+            var page = await GetJsonAsync<RemoteImageCatalogPageContract>(
+                $"{DeviceRoute()}/images/page?take={requestedPageSize}{cursorQuery}",
+                cancellationToken).ConfigureAwait(false);
+            foreach (var item in page.Items)
+            {
+                if (observedIds.Add(item.ImageId)) images.Add(item);
+            }
+            if (string.IsNullOrWhiteSpace(page.NextCursor) || page.Items.Count == 0) break;
+            cursor = page.NextCursor;
+        }
+        return images.Take(maximumCount).ToArray();
+    }
 
     public Task<byte[]> GetLowImageAsync(Guid imageId, CancellationToken cancellationToken = default) =>
         GetBytesAsync($"api/images/{imageId:D}?mode=low", "image/bmp", cancellationToken);
@@ -233,6 +260,16 @@ public sealed class RemoteDeviceClient : IRemoteDeviceClient, IAsyncDisposable
             $"api/images/{imageId:D}?mode=raw",
             "application/vnd.xraysystem.gray16",
             cancellationToken);
+
+    public Task<RemoteImageMetadataContract> GetImageAsync(
+        Guid imageId,
+        CancellationToken cancellationToken = default)
+    {
+        if (imageId == Guid.Empty) throw new ArgumentException("ImageId boş olamaz.", nameof(imageId));
+        return GetJsonAsync<RemoteImageMetadataContract>(
+            $"{DeviceRoute()}/images/{imageId:D}",
+            cancellationToken);
+    }
 
     public Task<RemoteLowFrame?> GetLatestLiveFrameAsync(
         TelemetryEventContract telemetry,

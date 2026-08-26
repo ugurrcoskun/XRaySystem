@@ -46,6 +46,20 @@ public interface IRemoteDeviceClient
     }
     Task<IReadOnlyList<RemoteImageMetadataContract>> GetImagesAsync(
         CancellationToken cancellationToken = default);
+    async Task<IReadOnlyList<RemoteImageMetadataContract>> GetImagesAsync(
+        int maximumCount,
+        CancellationToken cancellationToken = default)
+    {
+        if (maximumCount is < 1 or > 10_000)
+            throw new ArgumentOutOfRangeException(nameof(maximumCount));
+        return (await GetImagesAsync(cancellationToken).ConfigureAwait(false))
+            .Take(maximumCount)
+            .ToArray();
+    }
+    Task<RemoteImageMetadataContract> GetImageAsync(
+        Guid imageId,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Bu remote istemci tek görüntü metadata sorgusunu desteklemiyor.");
     Task<byte[]> GetLowImageAsync(Guid imageId, CancellationToken cancellationToken = default);
     Task<byte[]> GetRawImageAsync(Guid imageId, CancellationToken cancellationToken = default);
 }

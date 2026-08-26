@@ -53,7 +53,23 @@ public sealed class AcquisitionPersistenceException : IOException
     }
 }
 
-public interface IDeviceAcquisitionArchive
+public interface IDeviceAcquisitionCatalog
+{
+    IReadOnlyList<RemoteImageMetadataContract> GetMetadataPage(int skip, int take) => [];
+
+    IReadOnlyList<RemoteImageMetadataContract> GetMetadataPage(
+        DateTimeOffset? beforeCapturedAtUtc,
+        Guid? beforeImageId,
+        int take) => [];
+
+    bool TryGetMetadata(Guid imageId, out RemoteImageMetadataContract? metadata)
+    {
+        metadata = null;
+        return false;
+    }
+}
+
+public interface IDeviceAcquisitionArchive : IDeviceAcquisitionCatalog
 {
     DeviceAcquisitionArchiveReceipt Save(
         XRayMeasurement measurement,
@@ -61,6 +77,12 @@ public interface IDeviceAcquisitionArchive
         byte[] lowPreviewBmp);
 
     IReadOnlyList<ArchivedRemoteImage> LoadRecent(int maximumCount);
+
+    bool TryLoad(Guid imageId, out ArchivedRemoteImage? image)
+    {
+        image = null;
+        return false;
+    }
 }
 
 public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
@@ -72,6 +94,13 @@ public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
     private readonly AcquisitionArtifactStorage? _storage;
     private readonly ILogger<DeviceAcquisitionArchive> _logger;
     private readonly byte[]? _integrityKey;
+    private readonly object _catalogGate = new();
+    private readonly Dictionary<Guid, CatalogEntry> _catalog = [];
+    private bool _catalogLoaded;
+
+    private sealed record CatalogEntry(
+        RemoteImageMetadataContract Metadata,
+        string ManifestPath);
 
     public DeviceAcquisitionArchive(
         DeviceAcquisitionArchiveOptions options,
@@ -139,6 +168,15 @@ public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
                 stem,
                 manifestBytes,
                 ManifestExtension);
+            lock (_catalogGate)
+            {
+                if (_catalogLoaded)
+                {
+                    _catalog[persistedMetadata.ImageId] = new CatalogEntry(
+                        persistedMetadata,
+                        Path.Combine(_options.BaseFolder, files.FileStem + ManifestExtension));
+                }
+            }
             _logger.LogInformation(
                 "Acquisition persisted: AcquisitionId={AcquisitionId} ImageId={ImageId} FileStem={FileStem}",
                 frame.AcquisitionId,
@@ -160,29 +198,165 @@ public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
         if (!_options.Enabled || _storage is null)
             return [];
 
-        var recoveredNewestFirst = new List<ArchivedRemoteImage>(maximumCount);
-        foreach (var manifestPath in Directory
-                     .EnumerateFiles(_options.BaseFolder, "*" + ManifestExtension, SearchOption.TopDirectoryOnly)
-                     .OrderByDescending(File.GetLastWriteTimeUtc))
+        EnsureCatalogLoaded();
+        CatalogEntry[] entries;
+        lock (_catalogGate)
+        {
+            entries = _catalog.Values
+                .OrderByDescending(entry => entry.Metadata.CapturedAtUtc)
+                .ThenByDescending(entry => entry.Metadata.ImageId)
+                .Take(maximumCount)
+                .ToArray();
+        }
+
+        var recoveredNewestFirst = new List<ArchivedRemoteImage>(entries.Length);
+        foreach (var entry in entries)
         {
             try
             {
-                recoveredNewestFirst.Add(LoadOne(manifestPath));
-                if (recoveredNewestFirst.Count == maximumCount) break;
+                recoveredNewestFirst.Add(LoadOne(entry.ManifestPath));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or FormatException or ArgumentException)
             {
                 _logger.LogWarning(
                     ex,
                     "Archived acquisition ignored after verification failure: Manifest={Manifest}",
-                    Path.GetFileName(manifestPath));
+                    Path.GetFileName(entry.ManifestPath));
+                RemoveCatalogEntry(entry.Metadata.ImageId);
                 if (_options.QuarantineIncompleteArtifacts)
-                    QuarantineArtifactSet(manifestPath);
+                    QuarantineArtifactSet(entry.ManifestPath);
             }
         }
 
         recoveredNewestFirst.Reverse();
         return recoveredNewestFirst;
+    }
+
+    public IReadOnlyList<RemoteImageMetadataContract> GetMetadataPage(int skip, int take)
+    {
+        if (skip < 0) throw new ArgumentOutOfRangeException(nameof(skip));
+        if (take is < 1 or > 200) throw new ArgumentOutOfRangeException(nameof(take));
+        if (!_options.Enabled || _storage is null) return [];
+
+        EnsureCatalogLoaded();
+        lock (_catalogGate)
+        {
+            return _catalog.Values
+                .Select(entry => entry.Metadata)
+                .OrderByDescending(metadata => metadata.CapturedAtUtc)
+                .ThenByDescending(metadata => metadata.ImageId)
+                .Skip(skip)
+                .Take(take)
+                .ToArray();
+        }
+    }
+
+    public IReadOnlyList<RemoteImageMetadataContract> GetMetadataPage(
+        DateTimeOffset? beforeCapturedAtUtc,
+        Guid? beforeImageId,
+        int take)
+    {
+        if (take is < 1 or > 200) throw new ArgumentOutOfRangeException(nameof(take));
+        if (beforeCapturedAtUtc.HasValue != beforeImageId.HasValue)
+            throw new ArgumentException("Cursor timestamp ve image ID birlikte verilmelidir.");
+        if (!_options.Enabled || _storage is null) return [];
+
+        EnsureCatalogLoaded();
+        lock (_catalogGate)
+        {
+            var query = _catalog.Values.Select(entry => entry.Metadata);
+            if (beforeCapturedAtUtc is { } capturedAt && beforeImageId is { } imageId)
+            {
+                query = query.Where(metadata =>
+                    metadata.CapturedAtUtc < capturedAt ||
+                    (metadata.CapturedAtUtc == capturedAt && metadata.ImageId.CompareTo(imageId) < 0));
+            }
+
+            return query
+                .OrderByDescending(metadata => metadata.CapturedAtUtc)
+                .ThenByDescending(metadata => metadata.ImageId)
+                .Take(take)
+                .ToArray();
+        }
+    }
+
+    public bool TryLoad(Guid imageId, out ArchivedRemoteImage? image)
+    {
+        if (imageId == Guid.Empty) throw new ArgumentException("ImageId boş olamaz.", nameof(imageId));
+        image = null;
+        if (!_options.Enabled || _storage is null) return false;
+
+        EnsureCatalogLoaded();
+        CatalogEntry? entry;
+        lock (_catalogGate) _catalog.TryGetValue(imageId, out entry);
+        if (entry is null) return false;
+
+        try
+        {
+            image = LoadOne(entry.ManifestPath);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or FormatException or ArgumentException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Archived acquisition ignored after verification failure: Manifest={Manifest}",
+                Path.GetFileName(entry.ManifestPath));
+            RemoveCatalogEntry(imageId);
+            if (_options.QuarantineIncompleteArtifacts)
+                QuarantineArtifactSet(entry.ManifestPath);
+            return false;
+        }
+    }
+
+    public bool TryGetMetadata(Guid imageId, out RemoteImageMetadataContract? metadata)
+    {
+        if (imageId == Guid.Empty) throw new ArgumentException("ImageId boş olamaz.", nameof(imageId));
+        metadata = null;
+        if (!_options.Enabled || _storage is null) return false;
+        EnsureCatalogLoaded();
+        lock (_catalogGate)
+        {
+            if (!_catalog.TryGetValue(imageId, out var entry)) return false;
+            metadata = entry.Metadata;
+            return true;
+        }
+    }
+
+    private void EnsureCatalogLoaded()
+    {
+        lock (_catalogGate)
+        {
+            if (_catalogLoaded) return;
+            _catalog.Clear();
+            foreach (var manifestPath in Directory
+                         .EnumerateFiles(_options.BaseFolder, "*" + ManifestExtension, SearchOption.TopDirectoryOnly)
+                         .OrderByDescending(File.GetLastWriteTimeUtc))
+            {
+                try
+                {
+                    var archived = LoadOne(manifestPath);
+                    _catalog[archived.Metadata.ImageId] = new CatalogEntry(
+                        archived.Metadata,
+                        manifestPath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or FormatException or ArgumentException)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Archived acquisition ignored while catalog was rebuilt: Manifest={Manifest}",
+                        Path.GetFileName(manifestPath));
+                    if (_options.QuarantineIncompleteArtifacts)
+                        QuarantineArtifactSet(manifestPath);
+                }
+            }
+            _catalogLoaded = true;
+        }
+    }
+
+    private void RemoveCatalogEntry(Guid imageId)
+    {
+        lock (_catalogGate) _catalog.Remove(imageId);
     }
 
     private ArchivedRemoteImage LoadOne(string manifestPath)
