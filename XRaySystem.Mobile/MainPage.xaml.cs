@@ -43,6 +43,7 @@ public partial class MainPage : ContentPage
     private double _androidPinchAnchorX;
     private double _androidPinchAnchorY;
     private Android.Graphics.Bitmap? _androidDisplayedBitmap;
+    private AndroidX.RecyclerView.Widget.RecyclerView? _androidHistoryRecyclerView;
     private AndroidPresentationFrame? _androidPendingPresentationFrame;
     private bool _androidPresentationWorkerRunning;
     private bool _androidPresentationStopping;
@@ -75,8 +76,10 @@ public partial class MainPage : ContentPage
         SensorImage.HandlerChanged += OnSensorImageHandlerChanged;
         FullScreenSensorImage.HandlerChanged += OnFullScreenSensorImageHandlerChanged;
         FullScreenImageViewport.HandlerChanged += OnFullScreenImageViewportHandlerChanged;
+        HistoryCollectionView.HandlerChanged += OnHistoryCollectionViewHandlerChanged;
         ConfigureAndroidImageGestures();
         ConfigureAndroidFullScreenViewport();
+        ConfigureAndroidHistoryScrolling();
 #endif
     }
 
@@ -719,6 +722,35 @@ public partial class MainPage : ContentPage
     private void OnFullScreenImageViewportHandlerChanged(object? sender, EventArgs e) =>
         ConfigureAndroidFullScreenViewport();
 
+    private void OnHistoryCollectionViewHandlerChanged(object? sender, EventArgs e) =>
+        ConfigureAndroidHistoryScrolling();
+
+    private void ConfigureAndroidHistoryScrolling()
+    {
+        if (_androidHistoryRecyclerView is not null)
+            _androidHistoryRecyclerView.Touch -= OnAndroidHistoryTouch;
+
+        _androidHistoryRecyclerView = HistoryCollectionView.Handler?.PlatformView
+            as AndroidX.RecyclerView.Widget.RecyclerView;
+        if (_androidHistoryRecyclerView is null)
+            return;
+
+        _androidHistoryRecyclerView.NestedScrollingEnabled = true;
+        _androidHistoryRecyclerView.Touch += OnAndroidHistoryTouch;
+    }
+
+    private static void OnAndroidHistoryTouch(object? sender, Android.Views.View.TouchEventArgs e)
+    {
+        if (sender is not Android.Views.View historyView || e.Event is null)
+            return;
+
+        var releaseParent = e.Event.ActionMasked is
+            Android.Views.MotionEventActions.Up or
+            Android.Views.MotionEventActions.Cancel;
+        historyView.Parent?.RequestDisallowInterceptTouchEvent(!releaseParent);
+        e.Handled = false;
+    }
+
     private void ConfigureAndroidImageGestures()
     {
         if (_androidImageView is not null)
@@ -936,6 +968,12 @@ public partial class MainPage : ContentPage
     {
 #if ANDROID
         _viewModel.PresentationFrameReady -= OnAndroidPresentationFrameReady;
+        HistoryCollectionView.HandlerChanged -= OnHistoryCollectionViewHandlerChanged;
+        if (_androidHistoryRecyclerView is not null)
+        {
+            _androidHistoryRecyclerView.Touch -= OnAndroidHistoryTouch;
+            _androidHistoryRecyclerView = null;
+        }
         lock (_androidPresentationGate)
         {
             _androidPresentationStopping = true;

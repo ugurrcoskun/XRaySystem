@@ -629,17 +629,23 @@
                         </VerticalStackLayout>
                     </Grid>
 
-                    <FlexLayout BindableLayout.ItemsSource="{Binding RecentImages}"
-                                IsVisible="{Binding HasRecentImages}"
-                                Direction="Row"
-                                Wrap="Wrap"
-                                JustifyContent="Start"
-                                AlignItems="Start">
-                        <BindableLayout.ItemTemplate>
+                    <CollectionView x:Name="HistoryCollectionView"
+                                    ItemsSource="{Binding RecentImages}"
+                                    IsVisible="{Binding HasRecentImages}"
+                                    HeightRequest="344"
+                                    SelectionMode="None"
+                                    ItemSizingStrategy="MeasureFirstItem"
+                                    VerticalScrollBarVisibility="Always"
+                                    AutomationId="MobileCapturesList"
+                                    SemanticProperties.Description="Scrollable list of recent mobile captures">
+                        <CollectionView.ItemsLayout>
+                            <LinearItemsLayout Orientation="Vertical" ItemSpacing="10" />
+                        </CollectionView.ItemsLayout>
+                        <CollectionView.ItemTemplate>
                             <DataTemplate x:DataType="dto:SensorDataDto">
-                                <Border WidthRequest="218"
-                                        Margin="0,0,10,10"
+                                <Border Margin="0"
                                         Padding="10"
+                                        HorizontalOptions="Fill"
                                         BackgroundColor="{StaticResource SurfaceSoft}"
                                         Stroke="{StaticResource Stroke}"
                                         StrokeShape="RoundRectangle 13"
@@ -674,8 +680,8 @@
                                     </Grid>
                                 </Border>
                             </DataTemplate>
-                        </BindableLayout.ItemTemplate>
-                    </FlexLayout>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
                 </VerticalStackLayout>
             </Border>
 

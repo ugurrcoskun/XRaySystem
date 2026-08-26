@@ -24,7 +24,7 @@ public sealed class MockXRayDetector : IXRayDetector, IDisposable
             SingleReader = true,
             SingleWriter = false
         });
-    private readonly ConcurrentDictionary<Guid, SnapFrameMode> _bufferModes = new();
+    private readonly ConcurrentDictionary<Guid, MockDetectorBuffer> _buffers = new();
     private CancellationTokenSource? _grabCancellation;
     private Task? _grabProducer;
     private Guid _configuredAcquisitionId;
@@ -174,7 +174,7 @@ public sealed class MockXRayDetector : IXRayDetector, IDisposable
             catch (OperationCanceledException) { }
         }
         while (_frames.Reader.TryRead(out var staleToken))
-            _bufferModes.TryRemove(staleToken.BufferTokenId, out _);
+            _buffers.TryRemove(staleToken.BufferTokenId, out _);
     }
 
     public Task<DetectorFrameToken> WaitForFrameAsync(CancellationToken cancellationToken) =>
@@ -184,24 +184,15 @@ public sealed class MockXRayDetector : IXRayDetector, IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateToken(token);
-        if (!_bufferModes.TryGetValue(token.BufferTokenId, out var mode))
+        if (!_buffers.TryGetValue(token.BufferTokenId, out var buffer))
             throw new InvalidOperationException("Detector buffer token geçerli değil veya daha önce release edildi.");
-
-        var pixels = new ushort[checked(token.Width * token.Height)];
-        var modeOffset = mode == SnapFrameMode.Raw ? 2048 : 512;
-        for (var y = 0; y < token.Height; y++)
-        {
-            var row = y * token.Width;
-            for (var x = 0; x < token.Width; x++)
-                pixels[row + x] = (ushort)((modeOffset + x * 11 + y * 7) & ushort.MaxValue);
-        }
-        return Task.FromResult(pixels);
+        return Task.FromResult(buffer.Pixels.ToArray());
     }
 
     public Task ReleaseFrameAsync(DetectorFrameToken token, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _bufferModes.TryRemove(token.BufferTokenId, out _);
+        _buffers.TryRemove(token.BufferTokenId, out _);
         return Task.CompletedTask;
     }
 
@@ -252,14 +243,15 @@ public sealed class MockXRayDetector : IXRayDetector, IDisposable
             checked(width * sizeof(ushort)),
             Gray16PixelFormat.Gray16LittleEndian,
             $"MockXRayDetector:{mode}");
-        _bufferModes[token.BufferTokenId] = mode;
+        var pixels = GenerateDigitalPhantomPixels(width, height, acquisitionId, token.SequenceNumber);
+        _buffers[token.BufferTokenId] = new MockDetectorBuffer(mode, pixels);
         try
         {
             await _frames.Writer.WriteAsync(token, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
-            _bufferModes.TryRemove(token.BufferTokenId, out _);
+            _buffers.TryRemove(token.BufferTokenId, out _);
             throw;
         }
     }
@@ -274,6 +266,58 @@ public sealed class MockXRayDetector : IXRayDetector, IDisposable
         if (token.StrideBytes != checked(token.Width * sizeof(ushort)))
             throw new InvalidDataException("Detector frame stride canonical Gray16 ile uyuşmuyor.");
     }
+
+    private static ushort[] GenerateDigitalPhantomPixels(
+        int width,
+        int height,
+        Guid acquisitionId,
+        long sequenceNumber)
+    {
+        var pixels = new ushort[checked(width * height)];
+        var random = new Random(HashCode.Combine(acquisitionId, sequenceNumber));
+        const double voltageFactor = 70.0 / 100.0;
+        const double currentFactor = 3.0 / 50.0;
+        var centerX = width / 2;
+        var centerY = height / 2;
+        const int numberOfSteps = 7;
+        var stepWidth = Math.Max(1, width / numberOfSteps);
+
+        for (var y = 0; y < height; y++)
+        {
+            var row = y * width;
+            var deltaY = y - centerY;
+
+            for (var x = 0; x < width; x++)
+            {
+                var deltaX = x - centerX;
+                var distance = Math.Sqrt(deltaX * deltaX + deltaY * deltaY);
+
+                var stepIndex = Math.Clamp(x / stepWidth, 0, numberOfSteps - 1);
+                var value = 5_000.0 + stepIndex * 7_500.0 * voltageFactor * currentFactor;
+
+                if (distance < width * 0.40)
+                {
+                    var ring = Math.Sin(distance / 20.0);
+                    value += ring * 2_500.0;
+                }
+
+                if (x > width * 0.15 && x < width * 0.35 &&
+                    y > height * 0.15 && y < height * 0.45)
+                {
+                    var linePattern = (x / 4) % 2;
+                    value += linePattern == 0 ? 6_000.0 : -6_000.0;
+                }
+
+                value += (random.NextDouble() - 0.5) * 800.0;
+
+                pixels[row + x] = (ushort)Math.Clamp(value, 0.0, ushort.MaxValue);
+            }
+        }
+
+        return pixels;
+    }
+
+    private sealed record MockDetectorBuffer(SnapFrameMode Mode, ushort[] Pixels);
 
     private void EnsureConfigured(Guid acquisitionId)
     {

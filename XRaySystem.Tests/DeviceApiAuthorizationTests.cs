@@ -119,6 +119,22 @@ public sealed class DeviceApiAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public async Task Viewer_receives_an_empty_catalog_page_when_no_images_are_archived()
+    {
+        using var request = CreateGet(
+            "/api/devices/mock-01/images/page?take=100",
+            ViewerKey);
+
+        using var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var page = await response.Content.ReadFromJsonAsync<RemoteImageCatalogPageContract>();
+        Assert.NotNull(page);
+        Assert.Empty(page.Items);
+        Assert.Null(page.NextCursor);
+    }
+
+    [Fact]
     public async Task Sending_header_and_bearer_credentials_together_is_rejected()
     {
         using var request = CreateGet("/api/devices/mock-01", ViewerKey);

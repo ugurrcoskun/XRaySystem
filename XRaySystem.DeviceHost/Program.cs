@@ -78,8 +78,9 @@ builder.Services.AddRateLimiter(options =>
 });
 builder.Services.AddOptions<DeviceSecurityOptions>()
     .Bind(builder.Configuration.GetSection(DeviceSecurityOptions.SectionName))
-    .Validate(options => options.IsValid(out _), "DeviceHost güvenlik yapılandırması geçersiz.")
     .ValidateOnStart();
+builder.Services.AddSingleton<Microsoft.Extensions.Options.IValidateOptions<DeviceSecurityOptions>,
+    DeviceSecurityOptionsValidator>();
 builder.Services
     .AddAuthentication(DeviceApiKeyAuthenticationHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, DeviceApiKeyAuthenticationHandler>(

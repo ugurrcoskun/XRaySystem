@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.Options;
 
 namespace XRaySystem.DeviceHost;
 
@@ -82,6 +83,17 @@ public sealed class DeviceApiKeyCredential
     public string Key { get; set; } = string.Empty;
     public string Subject { get; set; } = string.Empty;
     public string Role { get; set; } = DeviceRoles.Viewer;
+}
+
+public sealed class DeviceSecurityOptionsValidator : IValidateOptions<DeviceSecurityOptions>
+{
+    public ValidateOptionsResult Validate(string? name, DeviceSecurityOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return options.IsValid(out var error)
+            ? ValidateOptionsResult.Success
+            : ValidateOptionsResult.Fail(error);
+    }
 }
 
 public static class DeviceRoles

@@ -187,7 +187,17 @@ public static class DeviceApi
         var nextCursor = items.Count == effectiveTake
             ? EncodeCatalogCursor(items[^1])
             : null;
-        return Results.Ok(new RemoteImageCatalogPageContract(items, nextCursor));
+
+        // Keep the wire contract stable without invoking the positional record constructor in
+        // the DeviceHost process. A Windows Application Control environment has been observed
+        // to terminate the process with an SEHException at that constructor when the archive is
+        // empty. Materializing the collection also prevents a catalog implementation from
+        // exposing a mutable or deferred sequence during JSON serialization.
+        return Results.Ok(new
+        {
+            Items = items.ToArray(),
+            NextCursor = nextCursor
+        });
     }
 
     private static IResult GetImage(
