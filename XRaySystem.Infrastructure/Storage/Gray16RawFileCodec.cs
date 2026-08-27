@@ -5,8 +5,9 @@ using XRaySystem.Domain.ValueObjects;
 namespace XRaySystem.Infrastructure.Storage;
 
 /// <summary>
-/// XRaySystem'e ait sürümlü, platformdan bağımsız Gray16 dosya biçimi.
-/// Piksel verisi little-endian saklanır ve SHA-256 ile doğrulanır.
+/// Legacy XRaySystem Gray16 container reader. This private file format is kept
+/// only so existing engineering archives remain readable; production code
+/// must persist new acquisitions with <see cref="Gray16TiffCodec"/>.
 /// </summary>
 public static class Gray16RawFileCodec
 {

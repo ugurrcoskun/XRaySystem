@@ -22,12 +22,14 @@ public sealed record AcquisitionArtifactFiles(
 public sealed record AcquisitionPreviewFile(string FileStem, string PreviewPath);
 
 /// <summary>
-/// Writes the canonical Gray16 source and its display derivative as one
+/// Writes the canonical Gray16 TIFF source and its display derivative as one
 /// recoverable pair. Temporary files are verified before either final name is
 /// made visible.
 /// </summary>
 public sealed class AcquisitionArtifactStorage
 {
+    private const string SourceTiffExtension = ".tiff";
+    private const string LegacyRawExtension = ".xrayraw";
     private const int MaxCollisionAttempts = 100;
     private readonly string _baseFolder;
     private readonly object _writeGate = new();
@@ -97,9 +99,10 @@ public sealed class AcquisitionArtifactStorage
             for (var attempt = 0; attempt < MaxCollisionAttempts; attempt++)
             {
                 var stem = CreateCandidateStem(baseStem, acquisitionId, attempt);
-                var previewPath = Path.Combine(_baseFolder, stem + extension);
-                var rawPath = Path.Combine(_baseFolder, stem + ".xrayraw");
-                if (File.Exists(previewPath) || File.Exists(rawPath)) continue;
+                var previewPath = GetPreviewPath(stem, extension, sourceIncluded: false);
+                var sourcePath = Path.Combine(_baseFolder, stem + SourceTiffExtension);
+                var legacyRawPath = Path.Combine(_baseFolder, stem + LegacyRawExtension);
+                if (File.Exists(previewPath) || File.Exists(sourcePath) || File.Exists(legacyRawPath)) continue;
 
                 var temporaryPath = previewPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
@@ -134,15 +137,20 @@ public sealed class AcquisitionArtifactStorage
         if (!Path.GetExtension(fullPreviewPath).Equals(".bmp", StringComparison.OrdinalIgnoreCase) &&
             !Path.GetExtension(fullPreviewPath).Equals(".tif", StringComparison.OrdinalIgnoreCase) &&
             !Path.GetExtension(fullPreviewPath).Equals(".tiff", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("RAW yalnız doğrulanmış BMP/TIFF preview yanına kaydedilebilir.");
-        var rawPath = Path.ChangeExtension(fullPreviewPath, ".xrayraw");
+            throw new InvalidDataException("Gray16 TIFF yalnız doğrulanmış BMP/TIFF preview yanına kaydedilebilir.");
+        var previewStem = Path.GetFileNameWithoutExtension(fullPreviewPath);
+        if (previewStem.EndsWith(".preview", StringComparison.OrdinalIgnoreCase))
+            previewStem = previewStem[..^".preview".Length];
+        var rawPath = Path.Combine(
+            Path.GetDirectoryName(fullPreviewPath)!,
+            previewStem + SourceTiffExtension);
 
         lock (_writeGate)
         {
             if (File.Exists(rawPath))
             {
                 using var existingStream = File.OpenRead(rawPath);
-                var existing = Gray16RawFileCodec.Read(existingStream);
+                var existing = Gray16TiffCodec.Read(existingStream);
                 EnsureSameRawIdentity(existing, rawFrame);
                 return rawPath;
             }
@@ -152,12 +160,12 @@ public sealed class AcquisitionArtifactStorage
             {
                 using (var stream = CreateWriteStream(temporaryPath))
                 {
-                    Gray16RawFileCodec.Write(stream, rawFrame);
+                    Gray16TiffCodec.Write(stream, rawFrame);
                     stream.Flush(flushToDisk: true);
                 }
                 using (var verifyStream = File.OpenRead(temporaryPath))
                 {
-                    var verified = Gray16RawFileCodec.Read(verifyStream);
+                    var verified = Gray16TiffCodec.Read(verifyStream);
                     EnsureSameRawIdentity(verified, rawFrame);
                 }
                 File.Move(temporaryPath, rawPath);
@@ -191,12 +199,13 @@ public sealed class AcquisitionArtifactStorage
             for (var attempt = 0; attempt < MaxCollisionAttempts; attempt++)
             {
                 var stem = CreateCandidateStem(baseStem, rawFrame.AcquisitionId, attempt);
-                var previewPath = Path.Combine(_baseFolder, stem + extension);
-                var rawPath = Path.Combine(_baseFolder, stem + ".xrayraw");
+                var rawPath = Path.Combine(_baseFolder, stem + SourceTiffExtension);
+                var previewPath = GetPreviewPath(stem, extension, sourceIncluded: true);
+                var legacyRawPath = Path.Combine(_baseFolder, stem + LegacyRawExtension);
                 var metadataPath = metadataExtension is null
                     ? null
                     : Path.Combine(_baseFolder, stem + metadataExtension);
-                if (File.Exists(previewPath) || File.Exists(rawPath) ||
+                if (File.Exists(previewPath) || File.Exists(rawPath) || File.Exists(legacyRawPath) ||
                     metadataPath is not null && File.Exists(metadataPath)) continue;
 
                 try
@@ -228,7 +237,12 @@ public sealed class AcquisitionArtifactStorage
     {
         EnsureContainedExistingFile(path);
         using var stream = File.OpenRead(path);
-        return Gray16RawFileCodec.Read(stream);
+        return Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".tif" or ".tiff" => Gray16TiffCodec.Read(stream),
+            LegacyRawExtension => Gray16RawFileCodec.Read(stream),
+            _ => throw new InvalidDataException("Gray16 kaynak dosyası TIFF veya desteklenen eski XRaySystem raw biçiminde değil.")
+        };
     }
 
     public byte[] LoadPreview(string path)
@@ -253,6 +267,15 @@ public sealed class AcquisitionArtifactStorage
         byte[]? metadataBytes,
         string? metadataPath)
     {
+        if (string.Equals(
+                Path.GetFullPath(previewPath),
+                Path.GetFullPath(rawPath),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        {
+            WriteVerifiedTiffSourceWithMetadata(rawFrame, rawPath, metadataBytes, metadataPath);
+            return;
+        }
+
         var transactionId = Guid.NewGuid().ToString("N");
         var previewTemp = previewPath + "." + transactionId + ".tmp";
         var rawTemp = rawPath + "." + transactionId + ".tmp";
@@ -272,19 +295,19 @@ public sealed class AcquisitionArtifactStorage
             }
             using (var stream = CreateWriteStream(rawTemp))
             {
-                Gray16RawFileCodec.Write(stream, rawFrame);
+                Gray16TiffCodec.Write(stream, rawFrame);
                 stream.Flush(flushToDisk: true);
             }
 
             using (var verify = File.OpenRead(rawTemp))
             {
-                var verified = Gray16RawFileCodec.Read(verify);
+                var verified = Gray16TiffCodec.Read(verify);
                 if (verified.AcquisitionId != rawFrame.AcquisitionId ||
                     verified.Width != rawFrame.Width ||
                     verified.Height != rawFrame.Height ||
                     verified.Operation != rawFrame.Operation ||
                     verified.SnapFrameMode != rawFrame.SnapFrameMode)
-                    throw new InvalidDataException("Yazılan raw acquisition metadata doğrulaması başarısız.");
+                    throw new InvalidDataException("Yazılan Gray16 TIFF acquisition metadata doğrulaması başarısız.");
             }
             _faultInjector?.Invoke(AcquisitionArtifactWriteStage.RawTempVerified);
 
@@ -308,6 +331,57 @@ public sealed class AcquisitionArtifactStorage
             if (metadataTemp is not null) DeleteIfExists(metadataTemp);
             if (rawPromoted) DeleteIfExists(rawPath);
             if (previewPromoted) DeleteIfExists(previewPath);
+            if (metadataPromoted && metadataPath is not null) DeleteIfExists(metadataPath);
+            throw;
+        }
+    }
+
+    private void WriteVerifiedTiffSourceWithMetadata(
+        RawGray16Frame rawFrame,
+        string sourcePath,
+        byte[]? metadataBytes,
+        string? metadataPath)
+    {
+        var transactionId = Guid.NewGuid().ToString("N");
+        var sourceTemp = sourcePath + "." + transactionId + ".tmp";
+        var metadataTemp = metadataPath is null ? null : metadataPath + "." + transactionId + ".tmp";
+        var sourcePromoted = false;
+        var metadataPromoted = false;
+        try
+        {
+            if (metadataBytes is not null && metadataTemp is not null)
+            {
+                WriteBytes(metadataTemp, metadataBytes);
+                using var _ = JsonDocument.Parse(File.ReadAllBytes(metadataTemp));
+                _faultInjector?.Invoke(AcquisitionArtifactWriteStage.MetadataTempFlushed);
+            }
+            using (var stream = CreateWriteStream(sourceTemp))
+            {
+                Gray16TiffCodec.Write(stream, rawFrame);
+                stream.Flush(flushToDisk: true);
+            }
+            using (var verify = File.OpenRead(sourceTemp))
+            {
+                var verified = Gray16TiffCodec.Read(verify);
+                EnsureSameRawIdentity(verified, rawFrame);
+            }
+            _faultInjector?.Invoke(AcquisitionArtifactWriteStage.RawTempVerified);
+
+            File.Move(sourceTemp, sourcePath);
+            sourcePromoted = true;
+            _faultInjector?.Invoke(AcquisitionArtifactWriteStage.RawPromoted);
+            if (metadataTemp is not null && metadataPath is not null)
+            {
+                File.Move(metadataTemp, metadataPath);
+                metadataPromoted = true;
+                _faultInjector?.Invoke(AcquisitionArtifactWriteStage.MetadataPromoted);
+            }
+        }
+        catch
+        {
+            DeleteIfExists(sourceTemp);
+            if (metadataTemp is not null) DeleteIfExists(metadataTemp);
+            if (sourcePromoted) DeleteIfExists(sourcePath);
             if (metadataPromoted && metadataPath is not null) DeleteIfExists(metadataPath);
             throw;
         }
@@ -359,7 +433,7 @@ public sealed class AcquisitionArtifactStorage
         if (string.IsNullOrWhiteSpace(fileStem))
             throw new ArgumentException("Dosya adı boş olamaz.", nameof(fileStem));
         var stem = Path.GetFileName(fileStem.Trim());
-        foreach (var knownExtension in new[] { ".xraymeta.json", ".xrayraw", ".tiff", ".tif", ".bmp" })
+        foreach (var knownExtension in new[] { ".xraymeta.json", ".preview.tiff", ".source.tiff", ".xrayraw", ".tiff", ".tif", ".bmp" })
         {
             if (!stem.EndsWith(knownExtension, StringComparison.OrdinalIgnoreCase)) continue;
             stem = stem[..^knownExtension.Length];
@@ -385,8 +459,17 @@ public sealed class AcquisitionArtifactStorage
             actual.Height != expected.Height ||
             actual.Operation != expected.Operation ||
             actual.SnapFrameMode != expected.SnapFrameMode)
-            throw new InvalidDataException("RAW acquisition kimliği preview kaydıyla uyuşmuyor.");
+            throw new InvalidDataException("Gray16 TIFF acquisition kimliği preview kaydıyla uyuşmuyor.");
     }
+
+    private string GetPreviewPath(string stem, string extension, bool sourceIncluded) =>
+        Path.Combine(
+            _baseFolder,
+            extension is ".tif" or ".tiff"
+                ? sourceIncluded
+                    ? stem + SourceTiffExtension
+                    : stem + ".preview" + extension
+                : stem + extension);
 
     private static FileStream CreateWriteStream(string path) => new(
         path,

@@ -10,6 +10,7 @@ using XRaySystem.Infrastructure.Sensors;
 using System.Runtime.InteropServices;
 using XRaySystem.WPF.Services;
 using XRaySystem.WPF.ViewModels;
+using XRaySystem.WPF.Views;
 using XRaySystem.RemoteClient;
 
 namespace XRaySystem.WPF
@@ -25,7 +26,9 @@ namespace XRaySystem.WPF
             // Surface unexpected UI-thread failures without silently terminating the operator session.
             this.DispatcherUnhandledException += (s, e) =>
             {
-                MessageBox.Show($"RUNTIME ERROR:\n{e.Exception.Message}\n\nDetails:\n{e.Exception.InnerException?.Message}", "Critical Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ShowCriticalError(
+                    $"RUNTIME ERROR:\n{e.Exception.Message}\n\nDetails:\n{e.Exception.InnerException?.Message}",
+                    "Critical Error");
                 e.Handled = true;
             };
         }
@@ -50,7 +53,23 @@ namespace XRaySystem.WPF
             }
             catch (System.Exception ex)
             {
-                MessageBox.Show($"STARTUP ERROR:\n{ex.Message}\n\nDetails:\n{ex.InnerException?.Message}", "Unable to Start", MessageBoxButton.OK, MessageBoxImage.Error);
+                ShowCriticalError(
+                    $"STARTUP ERROR:\n{ex.Message}\n\nDetails:\n{ex.InnerException?.Message}",
+                    "Unable to Start");
+            }
+        }
+
+        private static void ShowCriticalError(string message, string title)
+        {
+            try
+            {
+                SystemDialogWindow.ShowMessage(message, title, SystemDialogSeverity.Error);
+            }
+            catch
+            {
+                // The native fallback is retained only for failures that prevent
+                // the application's own XAML dialog from being constructed.
+                MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 

@@ -162,7 +162,7 @@ public sealed class BoundedMeasurementFileCacheTests
             frame,
             isSimulator: true);
         var imagePath = Path.Combine(cacheRoot, $"{measurement.Id:N}.bmp");
-        var rawPath = Path.Combine(cacheRoot, $"{measurement.Id:N}.xrayraw");
+        var rawPath = Path.Combine(cacheRoot, $"{measurement.Id:N}.tiff");
         File.WriteAllBytes(imagePath, [1]);
         File.WriteAllBytes(rawPath, [2]);
         measurement.SetImagePath(imagePath);

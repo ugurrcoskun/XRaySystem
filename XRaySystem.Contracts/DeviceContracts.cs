@@ -65,6 +65,8 @@ public sealed record DeviceProtocolContract(
 
 public static class DeviceProtocolVersion
 {
+    // Temporary compatibility version for the currently deployed mobile app.
+    // Persisted acquisitions remain TIFF; only the remote transfer contract is v2.
     public const int Current = 2;
 }
 

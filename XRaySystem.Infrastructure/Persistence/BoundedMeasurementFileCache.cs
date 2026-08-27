@@ -61,6 +61,8 @@ public sealed class BoundedMeasurementFileCache
             .EnumerateFiles(_cacheRoot, "*", SearchOption.TopDirectoryOnly)
             .Where(path =>
                 Path.GetExtension(path).Equals(".bmp", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(path).Equals(".tif", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(path).Equals(".tiff", StringComparison.OrdinalIgnoreCase) ||
                 Path.GetExtension(path).Equals(".xrayraw", StringComparison.OrdinalIgnoreCase) ||
                 path.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) &&
                 File.GetLastWriteTimeUtc(path) <= DateTime.UtcNow.AddMinutes(-10))

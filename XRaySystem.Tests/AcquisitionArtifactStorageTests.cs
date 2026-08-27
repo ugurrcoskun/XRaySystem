@@ -16,6 +16,7 @@ public sealed class AcquisitionArtifactStorageTests
             var files = storage.Save(frame, Bmp(), ".bmp", "image_70.0kV_2.50mA_10ms_20260824_120000_000");
 
             Assert.True(File.Exists(files.RawPath));
+            Assert.Equal(".tiff", Path.GetExtension(files.RawPath));
             Assert.True(File.Exists(files.PreviewPath));
             var loaded = storage.LoadRaw(files.RawPath);
             Assert.Equal(frame.AcquisitionId, loaded.AcquisitionId);
@@ -71,7 +72,7 @@ public sealed class AcquisitionArtifactStorageTests
             var preview = storage.SavePreviewOnly(Bmp(), ".bmp", "remote_preview", frame.AcquisitionId);
 
             Assert.True(File.Exists(preview.PreviewPath));
-            Assert.Empty(Directory.GetFiles(folder, "*.xrayraw"));
+            Assert.Empty(Directory.GetFiles(folder, "*.tiff"));
 
             var rawPath = storage.SaveRawBesidePreview(frame, preview.PreviewPath);
             var repeatedPath = storage.SaveRawBesidePreview(frame, preview.PreviewPath);
@@ -79,7 +80,8 @@ public sealed class AcquisitionArtifactStorageTests
             Assert.Equal(rawPath, repeatedPath);
             Assert.Equal(frame.AcquisitionId, storage.LoadRaw(rawPath).AcquisitionId);
             Assert.Single(Directory.GetFiles(folder, "*.bmp"));
-            Assert.Single(Directory.GetFiles(folder, "*.xrayraw"));
+            Assert.Single(Directory.GetFiles(folder, "*.tiff"));
+            Assert.Empty(Directory.GetFiles(folder, "*.xrayraw"));
             Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
         });
     }
@@ -96,6 +98,26 @@ public sealed class AcquisitionArtifactStorageTests
 
             Assert.Throws<InvalidDataException>(() =>
                 storage.SaveRawBesidePreview(Frame(Guid.NewGuid()), preview.PreviewPath));
+        });
+    }
+
+    [Fact]
+    public void Legacy_xrayraw_remains_readable_but_new_saves_use_tiff()
+    {
+        InTemporaryFolder(folder =>
+        {
+            var storage = new AcquisitionArtifactStorage(folder);
+            var frame = Frame(Guid.NewGuid());
+            var legacyPath = Path.Combine(folder, "legacy.xrayraw");
+            using (var stream = File.Create(legacyPath))
+                Gray16RawFileCodec.Write(stream, frame);
+
+            var restored = storage.LoadRaw(legacyPath);
+            var current = storage.Save(frame, Bmp(), ".bmp", "current");
+
+            Assert.Equal(frame.Pixels, restored.Pixels);
+            Assert.Equal(".tiff", Path.GetExtension(current.RawPath));
+            Assert.Single(Directory.GetFiles(folder, "*.xrayraw"));
         });
     }
 

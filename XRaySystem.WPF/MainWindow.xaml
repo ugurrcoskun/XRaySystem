@@ -337,6 +337,23 @@
                            FontSize="11"
                            FontWeight="SemiBold"
                            Margin="0,4,0,0"/>
+                <TextBlock Text="{Binding ObservedControlStateText}"
+                           AutomationProperties.AutomationId="ObservedControlStateText"
+                           AutomationProperties.Name="Observed device control state"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Margin="0,4,0,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#A7B6C9"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsRemoteOperatorActive}" Value="True">
+                                    <Setter Property="Foreground" Value="#00E5FF"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </StackPanel>
                      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                 <Button Command="{Binding SnapCommand}"
@@ -353,6 +370,17 @@
                                     <Setter Property="Background" Value="#FFD60A"/>
                                     <Setter Property="Foreground" Value="#000000"/>
                                 </DataTrigger>
+                                <DataTrigger Binding="{Binding IsObservedSnapping}" Value="True">
+                                    <Setter Property="Content" Value="SNAPPING..."/>
+                                    <Setter Property="Background" Value="#FFD60A"/>
+                                    <Setter Property="Foreground" Value="#000000"/>
+                                    <Setter Property="Opacity" Value="1"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsObservedFrozen}" Value="True">
+                                    <Setter Property="Background" Value="#FF9500"/>
+                                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                                    <Setter Property="Opacity" Value="1"/>
+                                </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </Button.Style>
@@ -361,8 +389,19 @@
                 <Button Content="{Binding StartGrabActionText}"
                         Command="{Binding StartGrabCommand}"
                         AutomationProperties.AutomationId="StartGrabButton"
-                        Style="{StaticResource PrimaryButtonStyle}"
-                        Margin="0,0,10,0"/>
+                        Margin="0,0,10,0">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsObservedGrabbing}" Value="True">
+                                    <Setter Property="Background" Value="#163A27"/>
+                                    <Setter Property="Foreground" Value="#32D74B"/>
+                                    <Setter Property="Opacity" Value="1"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
                 <Button Content="FREEZE"
                         Command="{Binding StopCommand}"
                         AutomationProperties.AutomationId="FreezeGrabButton"
@@ -388,6 +427,12 @@
                                 <DataTrigger Binding="{Binding IsConnecting}" Value="True">
                                     <Setter Property="Content" Value="CONNECTING..."/>
                                     <Setter Property="Background" Value="#1E293B"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsDeviceObservedConnected}" Value="True">
+                                    <Setter Property="Content" Value="CONNECTED"/>
+                                    <Setter Property="Background" Value="#163A27"/>
+                                    <Setter Property="Foreground" Value="#32D74B"/>
+                                    <Setter Property="Opacity" Value="1"/>
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>

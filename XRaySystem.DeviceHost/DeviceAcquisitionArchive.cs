@@ -378,9 +378,9 @@ public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
         if (!fileName.EndsWith(ManifestExtension, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Acquisition manifest uzantısı geçersiz.");
         var stem = fileName[..^ManifestExtension.Length];
-        var rawPath = Path.Combine(_options.BaseFolder, stem + ".xrayraw");
+        var sourcePath = ResolveSourcePath(stem);
         var previewPath = Path.Combine(_options.BaseFolder, stem + ".bmp");
-        var frame = _storage.LoadRaw(rawPath);
+        var frame = _storage.LoadRaw(sourcePath);
         var preview = _storage.LoadPreview(previewPath);
 
         if (!string.Equals(
@@ -394,7 +394,7 @@ public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
             frame.StrideBytes != manifest.Metadata.StrideBytes ||
             frame.Operation != AcquisitionOperation.Snap ||
             manifest.Metadata.Operation != AcquisitionOperationContract.Snap)
-            throw new InvalidDataException("Acquisition RAW ve manifest metadata uyuşmuyor.");
+            throw new InvalidDataException("Acquisition Gray16 TIFF ve manifest metadata uyuşmuyor.");
 
         return new ArchivedRemoteImage(manifest.Metadata, frame, preview);
     }
@@ -450,7 +450,10 @@ public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
         foreach (var group in artifactGroups)
         {
             var paths = group.ToArray();
-            var complete = paths.Any(path => path.EndsWith(".xrayraw", StringComparison.OrdinalIgnoreCase)) &&
+            var complete = paths.Any(path =>
+                               path.EndsWith(".tiff", StringComparison.OrdinalIgnoreCase) ||
+                               path.EndsWith(".tif", StringComparison.OrdinalIgnoreCase) ||
+                               path.EndsWith(".xrayraw", StringComparison.OrdinalIgnoreCase)) &&
                            paths.Any(path => path.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase)) &&
                            paths.Any(path => path.EndsWith(ManifestExtension, StringComparison.OrdinalIgnoreCase));
             if (complete || paths.Any(path => File.GetLastWriteTimeUtc(path) > cutoff)) continue;
@@ -466,6 +469,8 @@ public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
         QuarantineFiles(
             [
                 manifestPath,
+                Path.Combine(_options.BaseFolder, stem + ".tiff"),
+                Path.Combine(_options.BaseFolder, stem + ".tif"),
                 Path.Combine(_options.BaseFolder, stem + ".xrayraw"),
                 Path.Combine(_options.BaseFolder, stem + ".bmp")
             ]);
@@ -506,6 +511,8 @@ public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
 
     private static bool IsArtifactOrTemporary(string fileName) =>
         fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith(".tiff", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith(".tif", StringComparison.OrdinalIgnoreCase) ||
         fileName.EndsWith(".xrayraw", StringComparison.OrdinalIgnoreCase) ||
         fileName.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase) ||
         fileName.EndsWith(ManifestExtension, StringComparison.OrdinalIgnoreCase);
@@ -516,6 +523,17 @@ public sealed class DeviceAcquisitionArchive : IDeviceAcquisitionArchive
         if (fileName.EndsWith(ManifestExtension, StringComparison.OrdinalIgnoreCase))
             return fileName[..^ManifestExtension.Length];
         return Path.GetFileNameWithoutExtension(fileName);
+    }
+
+    private string ResolveSourcePath(string stem)
+    {
+        var tiffPath = Path.Combine(_options.BaseFolder, stem + ".tiff");
+        if (File.Exists(tiffPath)) return tiffPath;
+        var tifPath = Path.Combine(_options.BaseFolder, stem + ".tif");
+        if (File.Exists(tifPath)) return tifPath;
+        // Read-only migration path for archives written before TIFF became the
+        // canonical persisted source. New writes never create this extension.
+        return Path.Combine(_options.BaseFolder, stem + ".xrayraw");
     }
 
     private static void VerifyWritable(string baseFolder)

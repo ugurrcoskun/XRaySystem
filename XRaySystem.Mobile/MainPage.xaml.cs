@@ -21,6 +21,7 @@ public partial class MainPage : ContentPage
     private double _fullScreenPinchStartScale = MinimumImageScale;
     private double _fullScreenPanStartX;
     private double _fullScreenPanStartY;
+    private bool _deviceControlTransitionRunning;
 #if ANDROID
     private const string AndroidPresentationFailureMessage =
         "The new GRAB frame could not be displayed; the latest valid image is preserved.";
@@ -54,11 +55,17 @@ public partial class MainPage : ContentPage
     public MainPage(MainViewModel viewModel)
     {
         InitializeComponent();
+        // Keep a single control surface instance so command bindings and
+        // AutomationId values are not duplicated between the two workspaces.
+        ControlPanel.Children.Remove(DeviceControlCard);
+        Grid.SetRow(DeviceControlCard, 0);
+        DeviceControlContentHost.Children.Add(DeviceControlCard);
         FullScreenPixelGrid.Drawable = _fullScreenPixelGridDrawable;
         SensorImage.GestureRecognizers.Remove(ImagePanGesture);
         _viewModel = viewModel;
         BindingContext = viewModel;
         _viewModel.ReviewImageOpened += OnReviewImageOpened;
+        _viewModel.DialogRequested += OnDialogRequested;
 #if WINDOWS
         PageScrollView.HandlerChanged += OnPageScrollViewHandlerChanged;
         ConfigureWindowsScrollViewer();
@@ -89,6 +96,69 @@ public partial class MainPage : ContentPage
     private void OnOpenFullScreenClicked(object? sender, EventArgs e)
         => OpenFullScreenViewer();
 
+    private async void OnOpenDeviceControlClicked(object? sender, EventArgs e) =>
+        await OpenDeviceControlAsync();
+
+    private async void OnOpenDeviceControlSwiped(object? sender, SwipedEventArgs e)
+    {
+        // Image pan owns horizontal movement while zoomed; do not turn a review
+        // gesture into an accidental navigation action.
+        if (SensorImage.Scale > MinimumImageScale || FullScreenViewerOverlay.IsVisible)
+            return;
+        await OpenDeviceControlAsync();
+    }
+
+    private async void OnCloseDeviceControlClicked(object? sender, EventArgs e) =>
+        await CloseDeviceControlAsync();
+
+    private async void OnCloseDeviceControlSwiped(object? sender, SwipedEventArgs e) =>
+        await CloseDeviceControlAsync();
+
+    private async Task OpenDeviceControlAsync()
+    {
+        if (_deviceControlTransitionRunning || DeviceControlPage.IsVisible)
+            return;
+
+        _deviceControlTransitionRunning = true;
+        try
+        {
+            var pageWidth = Width > 0 ? Width : 420;
+            DeviceControlPage.TranslationX = pageWidth;
+            DeviceControlPage.IsVisible = true;
+            PageScrollView.InputTransparent = true;
+            await DeviceControlScrollView.ScrollToAsync(0, 0, animated: false);
+            await DeviceControlPage.TranslateTo(0, 0, 220, Easing.CubicOut);
+            SemanticScreenReader.Announce("Device control");
+        }
+        finally
+        {
+            _deviceControlTransitionRunning = false;
+        }
+    }
+
+    private async Task CloseDeviceControlAsync()
+    {
+        if (_deviceControlTransitionRunning || !DeviceControlPage.IsVisible)
+            return;
+
+        _deviceControlTransitionRunning = true;
+        try
+        {
+            var pageWidth = Width > 0 ? Width : 420;
+            await DeviceControlPage.TranslateTo(pageWidth, 0, 200, Easing.CubicIn);
+            SemanticScreenReader.Announce("Imaging workspace");
+        }
+        finally
+        {
+            // Navigation animation is cosmetic; its interruption must never
+            // leave the imaging workspace blocked behind an input shield.
+            DeviceControlPage.IsVisible = false;
+            DeviceControlPage.TranslationX = 0;
+            PageScrollView.InputTransparent = false;
+            _deviceControlTransitionRunning = false;
+        }
+    }
+
     private void OpenFullScreenViewer()
     {
         if (!_viewModel.HasCurrentImage)
@@ -113,6 +183,27 @@ public partial class MainPage : ContentPage
     }
 
     private void OnCloseFullScreenClicked(object? sender, EventArgs e) => CloseFullScreenViewer();
+
+    private void OnDialogRequested(MobileDialogRequest request)
+    {
+        Dispatcher.Dispatch(() =>
+        {
+            var accent = request.Severity == MobileDialogSeverity.Warning
+                ? Color.FromArgb("#FFB020")
+                : Color.FromArgb("#FF4D5E");
+            AppDialogAccent.Color = accent;
+            AppDialogSeverityLabel.Text = request.Severity == MobileDialogSeverity.Warning
+                ? "ATTENTION"
+                : "ACTION REQUIRED";
+            AppDialogSeverityLabel.TextColor = accent;
+            AppDialogTitleLabel.Text = request.Title;
+            AppDialogMessageLabel.Text = request.Message;
+            AppDialogOverlay.IsVisible = true;
+        });
+    }
+
+    private void OnAppDialogDismissed(object? sender, EventArgs e) =>
+        AppDialogOverlay.IsVisible = false;
 
     private void CloseFullScreenViewer()
     {
@@ -230,6 +321,8 @@ public partial class MainPage : ContentPage
 
     private async void OnReviewImageOpened()
     {
+        if (DeviceControlPage.IsVisible)
+            await CloseDeviceControlAsync();
         ResetImageTransform();
         await PageScrollView.ScrollToAsync(ViewerPanel, ScrollToPosition.Start, animated: true);
     }
@@ -924,9 +1017,21 @@ public partial class MainPage : ContentPage
 
     protected override bool OnBackButtonPressed()
     {
+        if (AppDialogOverlay.IsVisible)
+        {
+            AppDialogOverlay.IsVisible = false;
+            return true;
+        }
+
         if (FullScreenViewerOverlay.IsVisible)
         {
             CloseFullScreenViewer();
+            return true;
+        }
+
+        if (DeviceControlPage.IsVisible)
+        {
+            _ = CloseDeviceControlAsync();
             return true;
         }
 

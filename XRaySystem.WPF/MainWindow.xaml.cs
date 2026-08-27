@@ -372,20 +372,18 @@ namespace XRaySystem.WPF
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(
+                    SystemDialogWindow.ShowMessage(
                         $"Unable to download the remote image:\n{ex.Message}",
                         "Remote History Error",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Warning);
+                        SystemDialogSeverity.Warning);
                     return;
                 }
                 if (string.IsNullOrEmpty(item.ImagePath) || !System.IO.File.Exists(item.ImagePath))
                 {
-                    MessageBox.Show(
+                    SystemDialogWindow.ShowMessage(
                         "The image is not available locally or in the connected DeviceHost archive.",
                         "Image Unavailable",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Warning);
+                        SystemDialogSeverity.Warning);
                     return;
                 }
             }
@@ -399,11 +397,10 @@ namespace XRaySystem.WPF
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
+                SystemDialogWindow.ShowMessage(
                     $"Unable to load image:\n{ex.Message}",
-                    "Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
+                    "Image Error",
+                    SystemDialogSeverity.Error);
             }
         }
 
@@ -432,12 +429,17 @@ namespace XRaySystem.WPF
                 }
                 else
                 {
-                    MessageBox.Show($"Image folder path:\n{folderPath}", "Folder Path");
+                    SystemDialogWindow.ShowMessage(
+                        $"Image folder path:\n{folderPath}",
+                        "Folder Path");
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Unable to open folder:\n{ex.Message}\n\nFolder path:\n{folderPath}", "Information");
+                SystemDialogWindow.ShowMessage(
+                    $"Unable to open folder:\n{ex.Message}\n\nFolder path:\n{folderPath}",
+                    "Folder Error",
+                    SystemDialogSeverity.Error);
             }
         }
 
@@ -449,7 +451,10 @@ namespace XRaySystem.WPF
             if (sender is not FrameworkElement el || el.DataContext is not XRaySystem.Application.DTOs.SensorDataDto item) return;
             if (string.IsNullOrEmpty(item.ImagePath) || !System.IO.File.Exists(item.ImagePath))
             {
-                MessageBox.Show("The file has not been saved yet or was deleted.", "Error");
+                SystemDialogWindow.ShowMessage(
+                    "The file has not been saved yet or was deleted.",
+                    "File Unavailable",
+                    SystemDialogSeverity.Warning);
                 return;
             }
 
@@ -465,12 +470,15 @@ namespace XRaySystem.WPF
                 }
                 else
                 {
-                    MessageBox.Show($"File path:\n{item.ImagePath}", "File Path");
+                    SystemDialogWindow.ShowMessage($"File path:\n{item.ImagePath}", "File Path");
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Unable to open file location:\n{ex.Message}", "Error");
+                SystemDialogWindow.ShowMessage(
+                    $"Unable to open file location:\n{ex.Message}",
+                    "File Location Error",
+                    SystemDialogSeverity.Error);
             }
         }
 
@@ -482,7 +490,10 @@ namespace XRaySystem.WPF
             if (sender is not FrameworkElement el || el.DataContext is not XRaySystem.Application.DTOs.SensorDataDto item) return;
             if (string.IsNullOrEmpty(item.ImagePath) || !System.IO.File.Exists(item.ImagePath))
             {
-                MessageBox.Show("No file is available to export.", "Error");
+                SystemDialogWindow.ShowMessage(
+                    "No file is available to export.",
+                    "Export Unavailable",
+                    SystemDialogSeverity.Warning);
                 return;
             }
 
@@ -498,11 +509,16 @@ namespace XRaySystem.WPF
                 try
                 {
                     System.IO.File.Copy(item.ImagePath, dialog.FileName, overwrite: true);
-                    MessageBox.Show($"Image exported successfully:\n{dialog.FileName}", "Export Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+                    SystemDialogWindow.ShowMessage(
+                        $"Image exported successfully:\n{dialog.FileName}",
+                        "Export Complete");
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show($"Unable to copy file:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    SystemDialogWindow.ShowMessage(
+                        $"Unable to copy file:\n{ex.Message}",
+                        "Export Error",
+                        SystemDialogSeverity.Error);
                 }
             }
         }
@@ -517,7 +533,10 @@ namespace XRaySystem.WPF
             if (btn.DataContext is not XRaySystem.Application.DTOs.SensorDataDto item) return;
             if (string.IsNullOrEmpty(item.ImagePath) || !File.Exists(item.ImagePath))
             {
-                MessageBox.Show("The image file has not been saved yet.", "Information");
+                SystemDialogWindow.ShowMessage(
+                    "The image file has not been saved yet.",
+                    "Image Unavailable",
+                    SystemDialogSeverity.Warning);
                 return;
             }
 
@@ -533,7 +552,10 @@ namespace XRaySystem.WPF
             {
                 if (_comparisonSelection.Count >= 4)
                 {
-                    MessageBox.Show("You can select up to 4 images.", "Selection Limit");
+                    SystemDialogWindow.ShowMessage(
+                        "You can select up to 4 images.",
+                        "Selection Limit",
+                        SystemDialogSeverity.Warning);
                     return;
                 }
 

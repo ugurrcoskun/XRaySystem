@@ -245,7 +245,7 @@ public sealed class DeviceApiAuthorizationTests : IDisposable
         Assert.Equal(512, result.Image.Width);
         Assert.Equal(512, result.Image.Height);
         Assert.True(result.Image.PersistedOnDevice);
-        var rawPath = Assert.Single(Directory.GetFiles(_archiveFolder, "*.xrayraw"));
+        var rawPath = Assert.Single(Directory.GetFiles(_archiveFolder, "*.tiff"));
         Assert.Single(Directory.GetFiles(_archiveFolder, "*.bmp"));
         Assert.Single(Directory.GetFiles(_archiveFolder, "*.xraymeta.json"));
         Assert.Contains(
@@ -253,7 +253,7 @@ public sealed class DeviceApiAuthorizationTests : IDisposable
             File.ReadAllText(Assert.Single(Directory.GetFiles(_archiveFolder, "*.xraymeta.json"))),
             StringComparison.Ordinal);
         using var rawStream = File.OpenRead(rawPath);
-        Assert.Equal(result.Image.AcquisitionId, Gray16RawFileCodec.Read(rawStream).AcquisitionId);
+        Assert.Equal(result.Image.AcquisitionId, Gray16TiffCodec.Read(rawStream).AcquisitionId);
         var auditLines = File.ReadAllLines(_auditFilePath);
         Assert.True(auditLines.Length >= 8);
         Assert.Contains(auditLines, line => line.Contains("integrityHmacSha256", StringComparison.Ordinal));

@@ -371,12 +371,12 @@ public sealed class DeviceCoordinatorTests
 
             Assert.True(snap.Image.PersistedOnDevice);
             Assert.Equal(1, buffer.Count);
-            var rawPath = Assert.Single(Directory.GetFiles(folder, "*.xrayraw"));
+            var rawPath = Assert.Single(Directory.GetFiles(folder, "*.tiff"));
             Assert.Single(Directory.GetFiles(folder, "*.bmp"));
             Assert.Single(Directory.GetFiles(folder, "*.xraymeta.json"));
             Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
             using var stream = File.OpenRead(rawPath);
-            var restored = Gray16RawFileCodec.Read(stream);
+            var restored = Gray16TiffCodec.Read(stream);
             Assert.Equal(snap.Image.AcquisitionId, restored.AcquisitionId);
 
             var recovered = Assert.Single(archive.LoadRecent(10));

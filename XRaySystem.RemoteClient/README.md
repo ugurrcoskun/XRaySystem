@@ -6,7 +6,7 @@ WPF ve MAUI için ortak, UI bağımsız DeviceHost istemcisidir.
 - SignalR üzerinden status, telemetry, SNAP progress ve güvenli hata olaylarını alır ve otomatik yeniden bağlanmayı kullanır.
 - Telemetri yeni bir live sequence bildirdiğinde yalnız en güncel low BMP'yi indirir.
 - Live BMP'nin gerçek sequence, acquisition ID ve boyut başlıklarını doğrular; tetikleyen telemetriyle aynıymış gibi varsaymaz.
-- SNAP geçmişinden low BMP ve `.xrayraw` binary içeriklerini alır.
+- SNAP geçmişinden low BMP ve telefonda kurulu v2 istemciyle geçici uyumluluk için legacy Gray16 transfer içeriğini alır; istemci tarafında kalıcı kayıt TIFF'tir.
 - Beklenmeyen content-type, boş binary cevap ve başarısız HTTP durumlarını hata olarak bildirir.
 - Yapılandırıldığında API anahtarını hem REST hem SignalR bağlantısında taşır; anahtarı loglamaz.
 - Yerel WPF/MAUI dosya yollarını bilmez.

@@ -6,7 +6,7 @@ using XRaySystem.Infrastructure.Storage;
 namespace XRaySystem.RemoteClient;
 
 /// <summary>
-/// Reconstructs a domain measurement only after the downloaded Gray16 artifact
+/// Reconstructs a domain measurement only after the downloaded Gray16 transfer artifact
 /// and the authoritative DeviceHost catalog entry agree.
 /// </summary>
 public static class RemoteImageMeasurementFactory
@@ -67,7 +67,7 @@ public static class RemoteImageMeasurementFactory
         ArgumentNullException.ThrowIfNull(metadata);
         ArgumentNullException.ThrowIfNull(rawBytes);
         if (rawBytes.Length == 0)
-            throw new InvalidDataException("Remote RAW görüntü boş.");
+            throw new InvalidDataException("Remote Gray16 görüntü boş.");
 
         RawGray16Frame frame;
         using (var stream = new MemoryStream(rawBytes, writable: false))
@@ -115,7 +115,7 @@ public static class RemoteImageMeasurementFactory
             metadata.SnapFrameMode is null ||
             frame.Operation != AcquisitionOperation.Snap ||
             frame.SnapFrameMode != expectedSnapMode)
-            throw new InvalidDataException("Remote RAW görüntü ve DeviceHost katalog metadata bilgisi uyuşmuyor.");
+            throw new InvalidDataException("Remote Gray16 görüntü ve DeviceHost katalog metadata bilgisi uyuşmuyor.");
     }
 
     private static MeasurementProvenance ToDomain(MeasurementProvenanceContract provenance) =>

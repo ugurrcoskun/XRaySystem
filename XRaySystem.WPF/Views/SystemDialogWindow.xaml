@@ -1,0 +1,99 @@
+<Window x:Class="XRaySystem.WPF.Views.SystemDialogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding DialogHeading}"
+        Width="500"
+        MinHeight="230"
+        MaxHeight="620"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        Background="#070B14"
+        FontFamily="Segoe UI"
+        WindowStartupLocation="CenterOwner"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown"
+        AutomationProperties.Name="{Binding DialogHeading}">
+    <Border Background="#101827"
+            BorderBrush="#38506F"
+            BorderThickness="1">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Background="{Binding AccentBrush}" />
+
+            <Grid Grid.Column="1" Margin="28,24,28,22">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Text="{Binding SeverityText}"
+                           Foreground="{Binding AccentBrush}"
+                           FontSize="10"
+                           FontWeight="SemiBold" />
+                <TextBlock Grid.Row="1"
+                           Margin="0,7,0,0"
+                           Text="{Binding DialogHeading}"
+                           Foreground="#F5F8FF"
+                           FontSize="20"
+                           FontWeight="SemiBold"
+                           TextWrapping="Wrap" />
+
+                <ScrollViewer Grid.Row="2"
+                              Margin="0,18,0,22"
+                              MaxHeight="360"
+                              VerticalScrollBarVisibility="Auto">
+                    <TextBlock Text="{Binding DialogMessage}"
+                               Foreground="#A7B6C9"
+                               FontSize="14"
+                               LineHeight="21"
+                               TextWrapping="Wrap" />
+                </ScrollViewer>
+
+                <Button Grid.Row="3"
+                        Width="112"
+                        Height="42"
+                        HorizontalAlignment="Right"
+                        Content="OK"
+                        IsDefault="True"
+                        Click="CloseButton_Click"
+                        Background="#00E5FF"
+                        Foreground="#071018"
+                        BorderThickness="0"
+                        FontWeight="SemiBold"
+                        Cursor="Hand"
+                        AutomationProperties.Name="Close message">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="ButtonBorder"
+                                    Background="{TemplateBinding Background}"
+                                    CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="ButtonBorder"
+                                            Property="Background"
+                                            Value="#5CFFFF" />
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="ButtonBorder"
+                                            Property="Opacity"
+                                            Value="0.78" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

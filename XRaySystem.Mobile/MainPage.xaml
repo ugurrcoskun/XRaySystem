@@ -10,10 +10,14 @@
     Title="X-Ray Vision Mobile"
     Shell.NavBarIsVisible="False">
 
-    <Grid>
+    <Grid x:Name="ApplicationRoot">
     <ScrollView x:Name="PageScrollView"
                 Orientation="Vertical"
                 VerticalScrollBarVisibility="Default">
+        <ScrollView.GestureRecognizers>
+            <SwipeGestureRecognizer Direction="Left"
+                                    Swiped="OnOpenDeviceControlSwiped" />
+        </ScrollView.GestureRecognizers>
         <VerticalStackLayout Padding="{OnPlatform Android='16,22,16,30', iOS='18,12,18,32', MacCatalyst='28', WinUI='28'}"
                              Spacing="16"
                              MaximumWidthRequest="1440">
@@ -48,6 +52,23 @@
                                VerticalTextAlignment="Center" />
                     </HorizontalStackLayout>
                 </Border>
+            </Grid>
+
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Padding="2,0">
+                <VerticalStackLayout Spacing="2" VerticalOptions="Center">
+                    <Label Text="WORKSPACE" Style="{StaticResource EyebrowLabelStyle}" />
+                    <Label Text="Swipe left for device control"
+                           TextColor="{StaticResource TextMuted}"
+                           FontSize="11" />
+                </VerticalStackLayout>
+                <Button Grid.Column="1"
+                        Text="DEVICE CONTROL"
+                        Clicked="OnOpenDeviceControlClicked"
+                        AutomationId="OpenDeviceControlButton"
+                        SemanticProperties.Description="Open device connection and acquisition controls"
+                        Padding="13,8"
+                        MinimumHeightRequest="40"
+                        FontSize="10" />
             </Grid>
 
             <!-- Acquisition iş akışı her ekran genişliğinde aynı dikey sırayı korur. -->
@@ -279,7 +300,9 @@
                       Grid.Row="0"
                       RowDefinitions="Auto,Auto"
                       RowSpacing="12">
-                    <Border Grid.Row="1" Style="{StaticResource CardStyle}">
+                    <Border x:Name="DeviceControlCard"
+                            Grid.Row="1"
+                            Style="{StaticResource CardStyle}">
                         <VerticalStackLayout Spacing="13">
                             <VerticalStackLayout Spacing="2">
                                 <Label Text="DEVICE LINK" Style="{StaticResource EyebrowLabelStyle}" />
@@ -662,15 +685,26 @@
                                                 StrokeShape="RoundRectangle 9">
                                             <Image Source="{Binding ImagePath}" Aspect="AspectFill" />
                                         </Border>
-                                        <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
-                                            <VerticalStackLayout Spacing="1">
+                                        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                            <VerticalStackLayout Spacing="4">
                                                 <Label Text="{Binding Timestamp, StringFormat='{}{0:dd.MM · HH:mm}'}"
                                                        TextColor="{StaticResource TextPrimary}"
                                                        FontFamily="OpenSansSemibold"
                                                        FontSize="11" />
-                                                <Label Text="{Binding PowerW, StringFormat='{}{0:F0} W'}"
-                                                       TextColor="{StaticResource Primary}"
-                                                       FontSize="10" />
+                                                <HorizontalStackLayout Spacing="10">
+                                                    <Label Text="{Binding Voltage, StringFormat='{}{0:F0} kV'}"
+                                                           TextColor="{StaticResource Primary}"
+                                                           FontFamily="OpenSansSemibold"
+                                                           FontSize="10" />
+                                                    <Label Text="{Binding PowerW, StringFormat='{}{0:F0} W'}"
+                                                           TextColor="{StaticResource Primary}"
+                                                           FontFamily="OpenSansSemibold"
+                                                           FontSize="10" />
+                                                    <Label Text="{Binding ExposureTime, StringFormat='{}{0:F0} ms'}"
+                                                           TextColor="{StaticResource Primary}"
+                                                           FontFamily="OpenSansSemibold"
+                                                           FontSize="10" />
+                                                </HorizontalStackLayout>
                                             </VerticalStackLayout>
                                             <Label Grid.Column="1"
                                                    Text="REVIEW"
@@ -696,197 +730,284 @@
         </VerticalStackLayout>
     </ScrollView>
 
+        <!-- Device control is a separate horizontal workspace. The existing
+             control card is re-parented into DeviceControlContentHost during
+             page construction so bindings and AutomationId values stay stable. -->
+        <Grid x:Name="DeviceControlPage"
+              IsVisible="False"
+              ZIndex="50"
+              BackgroundColor="{StaticResource PageBackground}"
+              AutomationId="DeviceControlPage">
+            <Grid.GestureRecognizers>
+                <SwipeGestureRecognizer Direction="Right"
+                                        Swiped="OnCloseDeviceControlSwiped" />
+            </Grid.GestureRecognizers>
+
+            <ScrollView x:Name="DeviceControlScrollView"
+                        Orientation="Vertical"
+                        VerticalScrollBarVisibility="Default">
+                <VerticalStackLayout Padding="{OnPlatform Android='16,22,16,30', iOS='18,12,18,32', MacCatalyst='28', WinUI='28'}"
+                                     Spacing="16"
+                                     MaximumWidthRequest="760">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                        <Button Text="BACK"
+                                Clicked="OnCloseDeviceControlClicked"
+                                AutomationId="CloseDeviceControlButton"
+                                SemanticProperties.Description="Return to the imaging workspace"
+                                Padding="12,8"
+                                MinimumHeightRequest="40"
+                                FontSize="10" />
+                        <VerticalStackLayout Grid.Column="1"
+                                             Spacing="1"
+                                             VerticalOptions="Center">
+                            <Label Text="DEVICE CONTROL"
+                                   FontFamily="OpenSansSemibold"
+                                   FontSize="20" />
+                            <Label Text="Connection and acquisition operations"
+                                   TextColor="{StaticResource TextMuted}"
+                                   FontSize="11" />
+                        </VerticalStackLayout>
+                        <Border Grid.Column="2"
+                                Padding="10,6"
+                                VerticalOptions="Center"
+                                BackgroundColor="{Binding StatusBadgeBackground}"
+                                Stroke="{Binding StatusAccentColor}"
+                                StrokeThickness="1"
+                                StrokeShape="RoundRectangle 16">
+                            <Label Text="{Binding StatusDisplayText}"
+                                   TextColor="{Binding StatusAccentColor}"
+                                   FontFamily="OpenSansSemibold"
+                                   FontSize="9" />
+                        </Border>
+                    </Grid>
+
+                    <Grid x:Name="DeviceControlContentHost" />
+
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="2,4,2,0">
+                        <Label Text="2 / 2"
+                               Style="{StaticResource CaptionLabelStyle}"
+                               TextColor="{StaticResource Primary}" />
+                        <Label Grid.Column="1"
+                               Text="Swipe right to return to the imaging workspace"
+                               Style="{StaticResource CaptionLabelStyle}"
+                               HorizontalTextAlignment="End" />
+                    </Grid>
+                </VerticalStackLayout>
+            </ScrollView>
+        </Grid>
+
         <!-- Telefonda görüntü incelemeyi sayfa ScrollView'undan ayırır. -->
         <Grid x:Name="FullScreenViewerOverlay"
               IsVisible="False"
               ZIndex="100"
-              BackgroundColor="{StaticResource PageBackground}"
-              RowDefinitions="Auto,*,Auto"
+              BackgroundColor="{StaticResource ViewerBackground}"
               AutomationId="FullScreenImageViewer">
-            <Grid Padding="16,12"
-                  ColumnDefinitions="*,Auto"
-                  ColumnSpacing="12"
-                  BackgroundColor="{StaticResource Surface}">
-                <VerticalStackLayout Spacing="1" VerticalOptions="Center">
-                    <Label Text="IMAGE REVIEW"
-                           Style="{StaticResource EyebrowLabelStyle}" />
-                    <Label Text="Pinch to zoom · drag with one finger to pan"
-                           TextColor="{StaticResource TextSecondary}"
-                           FontSize="11" />
+            <Grid x:Name="FullScreenImageViewport"
+                  IsClippedToBounds="True"
+                  BackgroundColor="{StaticResource ViewerBackground}">
+                <Image x:Name="FullScreenSensorImage"
+                       Source="{Binding CurrentImage}"
+                       Aspect="AspectFit"
+                       SizeChanged="OnFullScreenImageSizeChanged"
+                       AutomationId="FullScreenSensorImage"
+                       SemanticProperties.Description="Full-screen X-ray image">
+                    <Image.GestureRecognizers>
+                        <PinchGestureRecognizer x:Name="FullScreenPinchGesture"
+                                                PinchUpdated="OnFullScreenImagePinchUpdated" />
+                        <PanGestureRecognizer x:Name="FullScreenPanGesture"
+                                              TouchPoints="1"
+                                              PanUpdated="OnFullScreenImagePanUpdated" />
+                    </Image.GestureRecognizers>
+                </Image>
+
+                <GraphicsView x:Name="FullScreenPixelGrid"
+                              InputTransparent="True"
+                              IsVisible="False"
+                              AutomationProperties.IsInAccessibleTree="False" />
+
+                <Grid WidthRequest="24"
+                      HeightRequest="24"
+                      HorizontalOptions="Center"
+                      VerticalOptions="Center"
+                      InputTransparent="True">
+                    <BoxView HeightRequest="1"
+                             Color="{StaticResource Primary}"
+                             VerticalOptions="Center" />
+                    <BoxView WidthRequest="1"
+                             Color="{StaticResource Primary}"
+                             HorizontalOptions="Center" />
+                </Grid>
+            </Grid>
+
+            <Border Margin="10"
+                    Padding="9,7"
+                    BackgroundColor="#D907101C"
+                    Stroke="{StaticResource Stroke}"
+                    StrokeThickness="1"
+                    StrokeShape="RoundRectangle 8"
+                    HorizontalOptions="Start"
+                    VerticalOptions="Start"
+                    InputTransparent="True">
+                <VerticalStackLayout Spacing="2">
+                    <Label x:Name="FullScreenCenterCoordinateLabel"
+                           Text="CENTER X: —  Y: —"
+                           TextColor="{StaticResource TextPrimary}"
+                           FontFamily="OpenSansSemibold"
+                           FontSize="10" />
+                    <Label Text="{Binding FrameMetadataText}"
+                           TextColor="{StaticResource Primary}"
+                           FontFamily="OpenSansSemibold"
+                           FontSize="9" />
                     <Label Text="{Binding DataSourceStatusText}"
                            TextColor="{Binding DataSourceStatusColor}"
                            AutomationId="FullScreenDataSourceStatusLabel"
                            SemanticProperties.Description="Verified data source for the full-screen image"
                            FontFamily="OpenSansSemibold"
-                           FontSize="9" />
+                           FontSize="8" />
                 </VerticalStackLayout>
-                <Button Grid.Column="1"
-                        Text="CLOSE"
-                        Clicked="OnCloseFullScreenClicked"
-                        AutomationId="CloseFullScreenViewerButton"
-                        SemanticProperties.Description="Close full-screen image review"
-                        MinimumWidthRequest="76"
-                        HeightRequest="42"
-                        Padding="12,0" />
-            </Grid>
-
-            <Border Grid.Row="1"
-                    Margin="10"
-                    Padding="0"
-                    BackgroundColor="{StaticResource ViewerBackground}"
-                    Stroke="{StaticResource StrokeStrong}"
-                    StrokeThickness="1"
-                    StrokeShape="RoundRectangle 10">
-                <Grid x:Name="FullScreenImageViewport"
-                      IsClippedToBounds="True">
-                    <Image x:Name="FullScreenSensorImage"
-                           Source="{Binding CurrentImage}"
-                           Aspect="AspectFit"
-                           SizeChanged="OnFullScreenImageSizeChanged"
-                           AutomationId="FullScreenSensorImage"
-                           SemanticProperties.Description="Full-screen X-ray image">
-                        <Image.GestureRecognizers>
-                            <PinchGestureRecognizer x:Name="FullScreenPinchGesture"
-                                                    PinchUpdated="OnFullScreenImagePinchUpdated" />
-                            <PanGestureRecognizer x:Name="FullScreenPanGesture"
-                                                  TouchPoints="1"
-                                                  PanUpdated="OnFullScreenImagePanUpdated" />
-                        </Image.GestureRecognizers>
-                    </Image>
-
-                    <GraphicsView x:Name="FullScreenPixelGrid"
-                                  InputTransparent="True"
-                                  IsVisible="False"
-                                  AutomationProperties.IsInAccessibleTree="False" />
-
-                    <!-- Sabit merkez işareti, koordinata odaklanmanın gerçek hedefini gösterir. -->
-                    <Grid WidthRequest="24"
-                          HeightRequest="24"
-                          HorizontalOptions="Center"
-                          VerticalOptions="Center"
-                          InputTransparent="True">
-                        <BoxView HeightRequest="1"
-                                 Color="{StaticResource Primary}"
-                                 VerticalOptions="Center" />
-                        <BoxView WidthRequest="1"
-                                 Color="{StaticResource Primary}"
-                                 HorizontalOptions="Center" />
-                    </Grid>
-
-                    <Border Margin="12"
-                            Padding="9,6"
-                            BackgroundColor="#CC07101C"
-                            Stroke="{StaticResource Stroke}"
-                            StrokeThickness="1"
-                            StrokeShape="RoundRectangle 10"
-                            HorizontalOptions="Start"
-                            VerticalOptions="Start"
-                            InputTransparent="True">
-                        <Label x:Name="FullScreenCenterCoordinateLabel"
-                               Text="CENTER X: —  Y: —"
-                               TextColor="{StaticResource TextSecondary}"
-                               FontFamily="OpenSansSemibold"
-                               FontSize="10" />
-                    </Border>
-
-                    <Border Margin="12"
-                            Padding="9,6"
-                            BackgroundColor="#CC07101C"
-                            Stroke="{StaticResource Stroke}"
-                            StrokeThickness="1"
-                            StrokeShape="RoundRectangle 10"
-                            HorizontalOptions="Start"
-                            VerticalOptions="End"
-                            InputTransparent="True">
-                        <Label Text="{Binding FrameMetadataText}"
-                               TextColor="{StaticResource Primary}"
-                               FontFamily="OpenSansSemibold"
-                               FontSize="10" />
-                    </Border>
-                </Grid>
             </Border>
 
-            <Grid Grid.Row="2"
-                  Padding="12,10,12,16"
-                  RowDefinitions="Auto,Auto"
-                  ColumnDefinitions="Auto,Auto,Auto,*,Auto"
-                  RowSpacing="8"
-                  ColumnSpacing="7"
-                  BackgroundColor="{StaticResource Surface}">
-                <Button Text="−"
-                        Clicked="OnFullScreenZoomOutClicked"
-                        AutomationId="FullScreenZoomOutButton"
-                        SemanticProperties.Description="Zoom out in the full-screen image"
-                        WidthRequest="46"
-                        HeightRequest="44"
-                        Padding="0"
-                        FontSize="19" />
-                <Label Grid.Column="1"
-                       x:Name="FullScreenZoomLevelLabel"
-                       Text="100%"
-                       WidthRequest="56"
-                       TextColor="{StaticResource TextPrimary}"
-                       FontFamily="OpenSansSemibold"
-                       FontSize="11"
-                       HorizontalTextAlignment="Center"
-                       VerticalTextAlignment="Center" />
-                <Button Grid.Column="2"
-                        Text="+"
-                        Clicked="OnFullScreenZoomInClicked"
-                        AutomationId="FullScreenZoomInButton"
-                        SemanticProperties.Description="Zoom in on the full-screen image"
-                        WidthRequest="46"
-                        HeightRequest="44"
-                        Padding="0"
-                        FontSize="17" />
-                <Label Grid.Column="3"
-                       Text="PINCH · PAN"
-                       Style="{StaticResource CaptionLabelStyle}"
-                       VerticalOptions="Center" />
-                <Button Grid.Column="4"
-                        Text="RESET"
-                        Clicked="OnFullScreenResetZoomClicked"
-                        AutomationId="FullScreenResetZoomButton"
-                        SemanticProperties.Description="Reset full-screen zoom and image position"
-                        HeightRequest="44"
-                        Padding="12,0"
-                        FontSize="9" />
+            <Button Text="CLOSE"
+                    Margin="10"
+                    HorizontalOptions="End"
+                    VerticalOptions="Start"
+                    Clicked="OnCloseFullScreenClicked"
+                    AutomationId="CloseFullScreenViewerButton"
+                    SemanticProperties.Description="Close full-screen image review"
+                    MinimumWidthRequest="76"
+                    HeightRequest="44"
+                    Padding="12,0" />
 
-                <Grid Grid.Row="1"
-                      Grid.ColumnSpan="5"
-                      ColumnDefinitions="Auto,*,Auto,*,Auto"
+            <Border Margin="10,10,10,12"
+                    Padding="7"
+                    BackgroundColor="#E6101827"
+                    Stroke="{StaticResource StrokeStrong}"
+                    StrokeThickness="1"
+                    StrokeShape="RoundRectangle 10"
+                    HorizontalOptions="Fill"
+                    VerticalOptions="End">
+                <Grid RowDefinitions="Auto,Auto"
+                      ColumnDefinitions="Auto,Auto,Auto,*,Auto"
+                      RowSpacing="6"
                       ColumnSpacing="6">
-                    <Label Text="X"
-                           TextColor="{StaticResource TextSecondary}"
-                           VerticalTextAlignment="Center" />
-                    <Entry Grid.Column="1"
-                           x:Name="FullScreenCoordinateXEntry"
-                           AutomationId="FullScreenCoordinateXEntry"
-                           SemanticProperties.Description="Image X pixel coordinate to focus"
-                           Keyboard="Numeric"
-                           Placeholder="X"
-                           HeightRequest="42" />
-                    <Label Grid.Column="2"
-                           Text="Y"
-                           TextColor="{StaticResource TextSecondary}"
-                           VerticalTextAlignment="Center" />
-                    <Entry Grid.Column="3"
-                           x:Name="FullScreenCoordinateYEntry"
-                           AutomationId="FullScreenCoordinateYEntry"
-                           SemanticProperties.Description="Image Y pixel coordinate to focus"
-                           Keyboard="Numeric"
-                           Placeholder="Y"
-                           HeightRequest="42" />
-                    <Button Grid.Column="4"
-                            Text="FOCUS"
-                            Clicked="OnFullScreenFocusCoordinateClicked"
-                            AutomationId="FullScreenFocusCoordinateButton"
-                            SemanticProperties.Description="Center and zoom to the entered image coordinate"
+                    <Button Text="−"
+                            Clicked="OnFullScreenZoomOutClicked"
+                            AutomationId="FullScreenZoomOutButton"
+                            SemanticProperties.Description="Zoom out in the full-screen image"
+                            WidthRequest="44"
                             HeightRequest="42"
-                            Padding="12,0"
+                            Padding="0"
+                            FontSize="19" />
+                    <Label Grid.Column="1"
+                           x:Name="FullScreenZoomLevelLabel"
+                           Text="100%"
+                           WidthRequest="52"
+                           TextColor="{StaticResource TextPrimary}"
+                           FontFamily="OpenSansSemibold"
+                           FontSize="11"
+                           HorizontalTextAlignment="Center"
+                           VerticalTextAlignment="Center" />
+                    <Button Grid.Column="2"
+                            Text="+"
+                            Clicked="OnFullScreenZoomInClicked"
+                            AutomationId="FullScreenZoomInButton"
+                            SemanticProperties.Description="Zoom in on the full-screen image"
+                            WidthRequest="44"
+                            HeightRequest="42"
+                            Padding="0"
+                            FontSize="17" />
+                    <Label Grid.Column="3"
+                           Text="PINCH · PAN"
+                           Style="{StaticResource CaptionLabelStyle}"
+                           VerticalOptions="Center" />
+                    <Button Grid.Column="4"
+                            Text="RESET"
+                            Clicked="OnFullScreenResetZoomClicked"
+                            AutomationId="FullScreenResetZoomButton"
+                            SemanticProperties.Description="Reset full-screen zoom and image position"
+                            HeightRequest="42"
+                            Padding="10,0"
                             FontSize="9" />
+
+                    <Grid Grid.Row="1"
+                          Grid.ColumnSpan="5"
+                          ColumnDefinitions="Auto,*,Auto,*,Auto"
+                          ColumnSpacing="6">
+                        <Label Text="X"
+                               TextColor="{StaticResource TextSecondary}"
+                               VerticalTextAlignment="Center" />
+                        <Entry Grid.Column="1"
+                               x:Name="FullScreenCoordinateXEntry"
+                               AutomationId="FullScreenCoordinateXEntry"
+                               SemanticProperties.Description="Image X pixel coordinate to focus"
+                               Keyboard="Numeric"
+                               Placeholder="X"
+                               HeightRequest="42" />
+                        <Label Grid.Column="2"
+                               Text="Y"
+                               TextColor="{StaticResource TextSecondary}"
+                               VerticalTextAlignment="Center" />
+                        <Entry Grid.Column="3"
+                               x:Name="FullScreenCoordinateYEntry"
+                               AutomationId="FullScreenCoordinateYEntry"
+                               SemanticProperties.Description="Image Y pixel coordinate to focus"
+                               Keyboard="Numeric"
+                               Placeholder="Y"
+                               HeightRequest="42" />
+                        <Button Grid.Column="4"
+                                Text="FOCUS"
+                                Clicked="OnFullScreenFocusCoordinateClicked"
+                                AutomationId="FullScreenFocusCoordinateButton"
+                                SemanticProperties.Description="Center and zoom to the entered image coordinate"
+                                HeightRequest="42"
+                                Padding="10,0"
+                                FontSize="9" />
+                    </Grid>
                 </Grid>
-            </Grid>
+            </Border>
+        </Grid>
+
+        <Grid x:Name="AppDialogOverlay"
+              IsVisible="False"
+              ZIndex="200"
+              Padding="22"
+              BackgroundColor="#B3000000"
+              AutomationId="AppMessageDialog">
+            <Border MaximumWidthRequest="520"
+                    Padding="0"
+                    HorizontalOptions="Fill"
+                    VerticalOptions="Center"
+                    BackgroundColor="{StaticResource Surface}"
+                    Stroke="{StaticResource StrokeStrong}"
+                    StrokeThickness="1"
+                    StrokeShape="RoundRectangle 14">
+                <Grid ColumnDefinitions="5,*">
+                    <BoxView x:Name="AppDialogAccent" Color="{StaticResource Danger}" />
+                    <VerticalStackLayout Grid.Column="1" Padding="22,20" Spacing="12">
+                        <Label x:Name="AppDialogSeverityLabel"
+                               Text="ACTION REQUIRED"
+                               TextColor="{StaticResource Danger}"
+                               Style="{StaticResource EyebrowLabelStyle}" />
+                        <Label x:Name="AppDialogTitleLabel"
+                               Text="System Error"
+                               TextColor="{StaticResource TextPrimary}"
+                               FontFamily="OpenSansSemibold"
+                               FontSize="20" />
+                        <ScrollView MaximumHeightRequest="320">
+                            <Label x:Name="AppDialogMessageLabel"
+                                   TextColor="{StaticResource TextSecondary}"
+                                   FontSize="14"
+                                   LineHeight="1.35" />
+                        </ScrollView>
+                        <Button Text="OK"
+                                HorizontalOptions="End"
+                                MinimumWidthRequest="104"
+                                Clicked="OnAppDialogDismissed"
+                                AutomationId="DismissAppMessageButton"
+                                Style="{StaticResource PrimaryActionButton}" />
+                    </VerticalStackLayout>
+                </Grid>
+            </Border>
         </Grid>
     </Grid>
 </ContentPage>

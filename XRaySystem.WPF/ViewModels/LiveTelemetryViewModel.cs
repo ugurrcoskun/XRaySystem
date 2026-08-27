@@ -12,6 +12,7 @@ using XRaySystem.Domain.Entities;
 using XRaySystem.Domain.Interfaces;
 using XRaySystem.Domain.ValueObjects;
 using XRaySystem.WPF.Services;
+using XRaySystem.WPF.Views;
 using XRaySystem.Domain.WindowLevel;
 using XRaySystem.Contracts;
 using XRaySystem.Infrastructure.Storage;
@@ -37,13 +38,17 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private readonly SemaphoreSlim _historyLoadLock = new(1, 1);
     private int _remoteHistoryRefreshScheduled;
     private readonly ConcurrentQueue<Guid> _pendingRemoteHistoryImageIds = new();
+    private long _lastAutoDisplayedRemoteSnapUtcTicks;
     private int _sessionGeneration;
     private PendingMeasurement? _pendingLiveMeasurement;
     private int _liveDispatchScheduled;
     private long _lastFrameUtcTicks;
     private readonly DispatcherTimer _frameFreshnessTimer;
 
-    private sealed record PendingMeasurement(XRayMeasurement Measurement, int Generation);
+    private sealed record PendingMeasurement(
+        XRayMeasurement Measurement,
+        int Generation,
+        bool ForceLiveDisplay);
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
@@ -52,6 +57,12 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(AbortCommand))]
     [NotifyCanExecuteChangedFor(nameof(DisconnectCommand))]
     [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
+    [NotifyPropertyChangedFor(nameof(IsDeviceObservedConnected))]
+    [NotifyPropertyChangedFor(nameof(IsObservedGrabbing))]
+    [NotifyPropertyChangedFor(nameof(IsObservedSnapping))]
+    [NotifyPropertyChangedFor(nameof(IsObservedFrozen))]
+    [NotifyPropertyChangedFor(nameof(IsRemoteOperatorActive))]
+    [NotifyPropertyChangedFor(nameof(ObservedControlStateText))]
     private string _deviceStatus = XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString();
 
     [ObservableProperty]
@@ -60,6 +71,20 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(AbortCommand))]
     [NotifyPropertyChangedFor(nameof(CanSelectSnapFrameMode))]
     private bool _isCapturing = false;
+
+    // Device state can be observed by several clients, but only the client that
+    // successfully acquired the command lease may enable acquisition controls.
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ConnectCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StartGrabCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StopCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AbortCommand))]
+    [NotifyCanExecuteChangedFor(nameof(DisconnectCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
+    [NotifyPropertyChangedFor(nameof(CanSelectSnapFrameMode))]
+    [NotifyPropertyChangedFor(nameof(IsRemoteOperatorActive))]
+    [NotifyPropertyChangedFor(nameof(ObservedControlStateText))]
+    private bool _hasCommandControl;
 
     [ObservableProperty]
     private SensorDataDto? _latestTelemetry;
@@ -130,6 +155,23 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private SnapFrameMode _selectedSnapFrameMode = SnapFrameMode.Raw;
 
     public string SnapActionText => "SNAP";
+    public bool IsDeviceObservedConnected => DeviceStatus is
+        nameof(XRaySystem.Domain.Entities.DeviceStatus.Connected) or
+        nameof(XRaySystem.Domain.Entities.DeviceStatus.Grabbing) or
+        nameof(XRaySystem.Domain.Entities.DeviceStatus.Snapping) or
+        nameof(XRaySystem.Domain.Entities.DeviceStatus.Frozen);
+    public bool IsObservedGrabbing =>
+        DeviceStatus == nameof(XRaySystem.Domain.Entities.DeviceStatus.Grabbing);
+    public bool IsObservedSnapping =>
+        DeviceStatus == nameof(XRaySystem.Domain.Entities.DeviceStatus.Snapping);
+    public bool IsObservedFrozen =>
+        DeviceStatus == nameof(XRaySystem.Domain.Entities.DeviceStatus.Frozen);
+    public bool IsRemoteOperatorActive => IsDeviceObservedConnected && !HasCommandControl;
+    public string ObservedControlStateText => IsRemoteOperatorActive
+        ? $"REMOTE OPERATOR · {DeviceStatus.ToUpperInvariant()}"
+        : HasCommandControl
+            ? $"DESKTOP CONTROL · {DeviceStatus.ToUpperInvariant()}"
+            : DeviceStatus.ToUpperInvariant();
 
     private RawGray16Frame? _currentRawFrame;
     private string _currentWindowLevelKey = string.Empty;
@@ -189,7 +231,10 @@ public partial class LiveTelemetryViewModel : ObservableObject
         if (_sensorService is IAcquisitionCoordinator coordinator)
             coordinator.HardwareStateChanged += OnHardwareStateChanged;
         if (_remoteDeviceClient is not null)
+        {
             _remoteDeviceClient.FrameReadyReceived += OnRemoteFrameReady;
+            _remoteDeviceClient.ConnectionStateChanged += OnRemoteConnectionStateChanged;
+        }
         _frameFreshnessTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromSeconds(1)
@@ -201,9 +246,23 @@ public partial class LiveTelemetryViewModel : ObservableObject
 
     private void OnRemoteFrameReady(FrameReadyEventContract frame)
     {
-        if (frame.Operation != AcquisitionOperationContract.Snap || frame.ImageId is null) return;
-        _pendingRemoteHistoryImageIds.Enqueue(frame.ImageId.Value);
+        if (!RemoteObservationPolicy.ShouldAutoPresentCommittedSnap(
+                HasCommandControl,
+                frame.Operation,
+                frame.ImageId))
+            return;
+        _pendingRemoteHistoryImageIds.Enqueue(frame.ImageId!.Value);
         ScheduleRemoteHistoryRefresh();
+    }
+
+    private void OnRemoteConnectionStateChanged(bool connected)
+    {
+        if (!connected) return;
+
+        // SignalR can reconnect after one or more SNAP notifications were missed. Reconcile
+        // against the authoritative DeviceHost catalog instead of assuming event delivery was
+        // complete. The history lock coalesces this with an in-progress startup refresh.
+        _ = RefreshHistoryAsync();
     }
 
     private void ScheduleRemoteHistoryRefresh()
@@ -226,13 +285,17 @@ public partial class LiveTelemetryViewModel : ObservableObject
                     .GetImageAsync(imageId)
                     .ConfigureAwait(false);
                 var item = CreateRemoteHistoryDto(metadata);
+                var displayItem = item;
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
                     var existing = ImageHistory.FirstOrDefault(candidate => candidate.Id == item.Id);
                     if (existing is not null &&
                         !string.IsNullOrWhiteSpace(existing.ImagePath) &&
                         File.Exists(existing.ImagePath))
+                    {
+                        displayItem = existing;
                         return;
+                    }
                     if (existing is not null) ImageHistory.Remove(existing);
                     var insertAt = 0;
                     while (insertAt < ImageHistory.Count &&
@@ -240,6 +303,15 @@ public partial class LiveTelemetryViewModel : ObservableObject
                         insertAt++;
                     ImageHistory.Insert(insertAt, item);
                 });
+
+                // A SNAP initiated by the mobile operator must replace an older
+                // history review on the desktop. The desktop remains an observer:
+                // displaying the frame does not grant it command control.
+                if (RemoteObservationPolicy.ShouldAutoPresentCommittedSnap(
+                        HasCommandControl,
+                        metadata.Operation,
+                        metadata.ImageId))
+                    await DisplayRemoteSnapAsync(metadata, displayItem).ConfigureAwait(false);
             }
         }
         catch (Exception ex)
@@ -263,6 +335,34 @@ public partial class LiveTelemetryViewModel : ObservableObject
             Interlocked.Exchange(ref _remoteHistoryRefreshScheduled, 0);
             if (!_pendingRemoteHistoryImageIds.IsEmpty) ScheduleRemoteHistoryRefresh();
         }
+    }
+
+    private async Task DisplayRemoteSnapAsync(
+        RemoteImageMetadataContract metadata,
+        SensorDataDto item)
+    {
+        var capturedAtTicks = metadata.CapturedAtUtc.UtcDateTime.Ticks;
+        if (capturedAtTicks <= Interlocked.Read(ref _lastAutoDisplayedRemoteSnapUtcTicks))
+            return;
+
+        var previewPath = await EnsureRemoteHistoryAvailableAsync(item).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(previewPath) || !File.Exists(previewPath))
+            throw new FileNotFoundException(
+                "The verified remote SNAP preview could not be created.",
+                previewPath);
+
+        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            if (HasCommandControl ||
+                capturedAtTicks <= Interlocked.Read(ref _lastAutoDisplayedRemoteSnapUtcTicks))
+                return;
+
+            LoadHistoryTiff(previewPath, item);
+            Interlocked.Exchange(ref _lastAutoDisplayedRemoteSnapUtcTicks, capturedAtTicks);
+            ImageStatusBadgeText =
+                $"REMOTE SNAP FROZEN: {item.Voltage:F0} kV · {item.PowerW:F0} W · {item.ExposureTime:F0} ms";
+            ImageStatusBadgeColor = "#FFB020";
+        });
     }
 
     private void OnHardwareStateChanged(AcquisitionHardwareState state)
@@ -296,6 +396,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
             IsCapturing = status == XRaySystem.Domain.Entities.DeviceStatus.Grabbing;
             if (status == XRaySystem.Domain.Entities.DeviceStatus.Disconnected)
             {
+                HasCommandControl = false;
                 ClearLiveRawSource();
                 ImageStatusBadgeText = "DISCONNECTED";
                 ImageStatusBadgeColor = "#E57373";
@@ -317,8 +418,14 @@ public partial class LiveTelemetryViewModel : ObservableObject
 
     private void QueueLatestMeasurement(XRayMeasurement measurement)
     {
+        var forceLiveDisplay = _remoteDeviceClient is not null &&
+                               measurement.Frame is { } frame &&
+                               RemoteObservationPolicy.ShouldForceLivePresentation(frame.Operation);
         Interlocked.Exchange(ref _pendingLiveMeasurement,
-            new PendingMeasurement(measurement, Volatile.Read(ref _sessionGeneration)));
+            new PendingMeasurement(
+                measurement,
+                Volatile.Read(ref _sessionGeneration),
+                forceLiveDisplay));
         ScheduleLatestMeasurementDispatch();
     }
 
@@ -338,7 +445,25 @@ public partial class LiveTelemetryViewModel : ObservableObject
         Interlocked.Exchange(ref _liveDispatchScheduled, 0);
 
         if (pending is not null)
-            ApplyMeasurement(pending.Measurement, pending.Generation, displayWhilePaused: false);
+        {
+            if (pending.ForceLiveDisplay)
+            {
+                // Remote GRAB is authoritative live activity. It intentionally
+                // supersedes a locally opened history image without implying
+                // that this desktop owns the command lease.
+                IsPaused = false;
+                var frame = pending.Measurement.Frame;
+                ImageStatusBadgeText = frame is null
+                    ? "REMOTE GRAB ACTIVE · LOW PREVIEW"
+                    : $"REMOTE GRAB ACTIVE · {frame.Width}x{frame.Height} LOW PREVIEW";
+                ImageStatusBadgeColor = "#32D74B";
+            }
+
+            ApplyMeasurement(
+                pending.Measurement,
+                pending.Generation,
+                displayWhilePaused: pending.ForceLiveDisplay);
+        }
 
         if (Volatile.Read(ref _pendingLiveMeasurement) is not null)
             ScheduleLatestMeasurementDispatch();
@@ -526,16 +651,24 @@ public partial class LiveTelemetryViewModel : ObservableObject
     }
 
     private bool CanConnect() =>
-        !IsConnecting &&
+        !IsConnecting && !HasCommandControl &&
         DeviceStatus == XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString();
     private bool CanStartGrab() =>
+        RemoteObservationPolicy.CanIssueAcquisitionCommand(HasCommandControl) &&
         !IsConnecting && !IsCapturing && !IsSnapping &&
         DeviceStatus is nameof(XRaySystem.Domain.Entities.DeviceStatus.Connected) or
             nameof(XRaySystem.Domain.Entities.DeviceStatus.Frozen);
-    private bool CanStop() => IsCapturing;
-    private bool CanAbort() => IsCapturing || IsSnapping;
-    private bool CanDisconnect() => DeviceStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString();
-    private bool CanSnap() => DeviceStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString() && ExposureTimeIsValid && !IsSnapping;
+    private bool CanStop() =>
+        RemoteObservationPolicy.CanIssueAcquisitionCommand(HasCommandControl) && IsCapturing;
+    private bool CanAbort() =>
+        RemoteObservationPolicy.CanIssueAcquisitionCommand(HasCommandControl) && (IsCapturing || IsSnapping);
+    private bool CanDisconnect() => RemoteObservationPolicy.CanIssueAcquisitionCommand(HasCommandControl) &&
+                                    DeviceStatus != XRaySystem.Domain.Entities.DeviceStatus.Disconnected.ToString();
+    private bool CanSnap() => RemoteObservationPolicy.CanIssueAcquisitionCommand(HasCommandControl) &&
+                              DeviceStatus is nameof(XRaySystem.Domain.Entities.DeviceStatus.Connected) or
+                                  nameof(XRaySystem.Domain.Entities.DeviceStatus.Grabbing) or
+                                  nameof(XRaySystem.Domain.Entities.DeviceStatus.Frozen) &&
+                              ExposureTimeIsValid && !IsSnapping;
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(SnapCommand))]
     [NotifyCanExecuteChangedFor(nameof(StartGrabCommand))]
@@ -554,7 +687,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
     private bool _isPaused = false;
 
     public string StartGrabActionText => "GRAB";
-    public bool CanSelectSnapFrameMode => !IsCapturing && !IsSnapping;
+    public bool CanSelectSnapFrameMode => HasCommandControl && !IsCapturing && !IsSnapping;
 
     /// <summary>
     /// Kullanıcının girdiği tüp voltajı (kV).
@@ -658,11 +791,10 @@ public partial class LiveTelemetryViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(
+            SystemDialogWindow.ShowMessage(
                 $"The database is not ready, so SNAP was not started:\n{ex.Message}",
                 "Snap Unavailable",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+                SystemDialogSeverity.Warning);
             return;
         }
 
@@ -714,7 +846,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
             await App.DatabaseReady;
             await _saveMeasurementUseCase.ExecuteAsync(measurement);
 
-            ImageStatusBadgeText = $"SNAP FROZEN ({measurement.Frame.Width}x{measurement.Frame.Height} RAW + TIFF - {savedFiles.FileStem})";
+            ImageStatusBadgeText = $"SNAP FROZEN ({measurement.Frame.Width}x{measurement.Frame.Height} · 16-BIT TIFF - {savedFiles.FileStem})";
 
             var dto = _processTelemetryUseCase.Execute(measurement);
 
@@ -730,9 +862,12 @@ public partial class LiveTelemetryViewModel : ObservableObject
             // The captured frame remains visible even when TIFF/DB readiness or persistence fails.
             var preservedFileMessage = savedImagePath is not null && savedRawPath is not null &&
                                        File.Exists(savedImagePath) && File.Exists(savedRawPath)
-                ? $"\n\nRAW and TIFF files were preserved, but the metadata record may be incomplete:\n{savedRawPath}"
+                ? $"\n\nThe 16-bit TIFF source and preview were preserved, but the metadata record may be incomplete:\n{savedRawPath}"
                 : string.Empty;
-            System.Windows.MessageBox.Show($"{ex.Message}{preservedFileMessage}", "Snap Error");
+            SystemDialogWindow.ShowMessage(
+                $"{ex.Message}{preservedFileMessage}",
+                "Snap Error",
+                SystemDialogSeverity.Error);
         }
         finally
         {
@@ -746,7 +881,10 @@ public partial class LiveTelemetryViewModel : ObservableObject
         Interlocked.Increment(ref _sessionGeneration);
         if (item?.ImagePath == null || !File.Exists(item.ImagePath))
         {
-            System.Windows.MessageBox.Show("Image file not found.", "Error");
+            SystemDialogWindow.ShowMessage(
+                "Image file not found.",
+                "Image Unavailable",
+                SystemDialogSeverity.Warning);
             return;
         }
 
@@ -758,7 +896,10 @@ public partial class LiveTelemetryViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show($"Unable to load image: {ex.Message}", "Error");
+            SystemDialogWindow.ShowMessage(
+                $"Unable to load image: {ex.Message}",
+                "Image Error",
+                SystemDialogSeverity.Error);
         }
     }
 
@@ -793,19 +934,29 @@ public partial class LiveTelemetryViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStartGrab))]
     private async Task StartGrabAsync()
     {
-        Interlocked.Increment(ref _sessionGeneration);
-        _windowLevelRenderer.Invalidate();
-        ClearRawSource();
-        _liveSessionNumber++;
-        _sensorService.Profile = Profile;
-        ApplyAcquisitionParametersIfValid();
-        if (IsPaused)
-            await _resumeLiveUseCase.ExecuteAsync();
-        else
-            await _startCaptureUseCase.ExecuteAsync();
-        IsPaused = false;
-        ImageStatusBadgeText  = "GRAB ACTIVE · 512x512 LOW PREVIEW";
-        ImageStatusBadgeColor = "#34C759";
+        try
+        {
+            Interlocked.Increment(ref _sessionGeneration);
+            _windowLevelRenderer.Invalidate();
+            ClearRawSource();
+            _liveSessionNumber++;
+            _sensorService.Profile = Profile;
+            ApplyAcquisitionParametersIfValid();
+            if (IsPaused)
+                await _resumeLiveUseCase.ExecuteAsync();
+            else
+                await _startCaptureUseCase.ExecuteAsync();
+            IsPaused = false;
+            ImageStatusBadgeText = "GRAB ACTIVE · LOW PREVIEW";
+            ImageStatusBadgeColor = "#32D74B";
+        }
+        catch (Exception ex)
+        {
+            SystemDialogWindow.ShowMessage(
+                ex.Message,
+                "GRAB Failed",
+                SystemDialogSeverity.Error);
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanConnect))]
@@ -816,10 +967,15 @@ public partial class LiveTelemetryViewModel : ObservableObject
             IsConnecting = true;
             ClearRawSource();
             await _sensorService.ConnectAsync();
+            HasCommandControl = true;
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(ex.Message, "Sensor Connection Error");
+            HasCommandControl = false;
+            SystemDialogWindow.ShowMessage(
+                ex.Message,
+                "Sensor Connection Error",
+                SystemDialogSeverity.Error);
         }
         finally
         {
@@ -832,8 +988,18 @@ public partial class LiveTelemetryViewModel : ObservableObject
     {
         Interlocked.Increment(ref _sessionGeneration);
         _windowLevelRenderer.Invalidate();
-        await _sensorService.StopCaptureAsync();
-        ClearLiveRawSource();
+        try
+        {
+            await _sensorService.StopCaptureAsync();
+            ClearLiveRawSource();
+        }
+        catch (Exception ex)
+        {
+            SystemDialogWindow.ShowMessage(
+                ex.Message,
+                "Freeze Failed",
+                SystemDialogSeverity.Error);
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanAbort))]
@@ -841,9 +1007,19 @@ public partial class LiveTelemetryViewModel : ObservableObject
     {
         Interlocked.Increment(ref _sessionGeneration);
         _windowLevelRenderer.Invalidate();
-        await _sensorService.AbortAsync();
-        ClearLiveRawSource();
-        IsPaused = false;
+        try
+        {
+            await _sensorService.AbortAsync();
+            ClearLiveRawSource();
+            IsPaused = false;
+        }
+        catch (Exception ex)
+        {
+            SystemDialogWindow.ShowMessage(
+                ex.Message,
+                "Stop Failed",
+                SystemDialogSeverity.Error);
+        }
     }
     
     [RelayCommand(CanExecute = nameof(CanDisconnect))]
@@ -851,8 +1027,19 @@ public partial class LiveTelemetryViewModel : ObservableObject
     {
         Interlocked.Increment(ref _sessionGeneration);
         _windowLevelRenderer.Invalidate();
-        await _sensorService.DisconnectAsync();
-        ClearLiveRawSource();
+        try
+        {
+            await _sensorService.DisconnectAsync();
+            ClearLiveRawSource();
+            HasCommandControl = false;
+        }
+        catch (Exception ex)
+        {
+            SystemDialogWindow.ShowMessage(
+                ex.Message,
+                "Disconnect Failed",
+                SystemDialogSeverity.Error);
+        }
     }
 
     [RelayCommand]
@@ -868,6 +1055,11 @@ public partial class LiveTelemetryViewModel : ObservableObject
             {
                 try
                 {
+                    // History observation is read-only and must not require taking the device
+                    // command lease. This keeps the desktop catalog live while a mobile operator
+                    // owns acquisition control.
+                    await _remoteDeviceClient.ValidateProtocolAsync().ConfigureAwait(false);
+                    await _remoteDeviceClient.ConnectEventsAsync().ConfigureAwait(false);
                     remoteHistory = await _remoteDeviceClient.GetImagesAsync().ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -899,11 +1091,10 @@ public partial class LiveTelemetryViewModel : ObservableObject
         {
             System.Diagnostics.Debug.WriteLine($"RefreshHistoryAsync error: {ex.Message}");
             System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
-                System.Windows.MessageBox.Show(
+                SystemDialogWindow.ShowMessage(
                     $"Unable to load history records:\n{ex.Message}",
                     "History Load Error",
-                    System.Windows.MessageBoxButton.OK,
-                    System.Windows.MessageBoxImage.Warning));
+                    SystemDialogSeverity.Warning));
         }
         finally
         {
@@ -914,7 +1105,8 @@ public partial class LiveTelemetryViewModel : ObservableObject
     public async Task<string?> EnsureRemoteHistoryAvailableAsync(SensorDataDto item)
     {
         ArgumentNullException.ThrowIfNull(item);
-        if (!string.IsNullOrWhiteSpace(item.ImagePath) && File.Exists(item.ImagePath))
+        if (!string.IsNullOrWhiteSpace(item.ImagePath) && File.Exists(item.ImagePath) &&
+            !string.IsNullOrWhiteSpace(item.RawImagePath) && File.Exists(item.RawImagePath))
             return item.ImagePath;
         if (_remoteDeviceClient is null)
             return null;
@@ -925,7 +1117,7 @@ public partial class LiveTelemetryViewModel : ObservableObject
             frame = Gray16RawFileCodec.Read(stream);
         if (frame.AcquisitionId != item.AcquisitionId ||
             frame.Width != item.SourceWidth || frame.Height != item.SourceHeight)
-            throw new InvalidDataException("Remote history RAW metadata does not match the catalog entry.");
+            throw new InvalidDataException("Remote history Gray16 metadata does not match the catalog entry.");
 
         var requested = item.RequestedParameters ?? new AcquisitionParameters(
             item.Voltage,

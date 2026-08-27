@@ -13,7 +13,7 @@ public sealed class DeviceAcquisitionArchiveQuarantineTests
         var folder = CreateTempFolder();
         try
         {
-            var staleRaw = Path.Combine(folder, "stale.xrayraw");
+            var staleRaw = Path.Combine(folder, "stale.tiff");
             var staleTemporary = Path.Combine(folder, "interrupted.bmp.transaction.tmp");
             File.WriteAllBytes(staleRaw, [0x01]);
             File.WriteAllBytes(staleTemporary, [0x02]);
@@ -29,7 +29,7 @@ public sealed class DeviceAcquisitionArchiveQuarantineTests
             Assert.True(Directory.Exists(quarantine));
             Assert.Contains(
                 Directory.EnumerateFiles(quarantine, "*", SearchOption.AllDirectories),
-                path => Path.GetFileName(path) == "stale.xrayraw");
+                path => Path.GetFileName(path) == "stale.tiff");
             Assert.Contains(
                 Directory.EnumerateFiles(quarantine, "*", SearchOption.AllDirectories),
                 path => Path.GetFileName(path) == "interrupted.bmp.transaction.tmp");
@@ -46,7 +46,7 @@ public sealed class DeviceAcquisitionArchiveQuarantineTests
         var folder = CreateTempFolder();
         try
         {
-            var freshRaw = Path.Combine(folder, "fresh.xrayraw");
+            var freshRaw = Path.Combine(folder, "fresh.tiff");
             var freshTemporary = Path.Combine(folder, "fresh.bmp.transaction.tmp");
             File.WriteAllBytes(freshRaw, [0x01]);
             File.WriteAllBytes(freshTemporary, [0x02]);
@@ -117,6 +117,7 @@ public sealed class DeviceAcquisitionArchiveQuarantineTests
             File.WriteAllBytes(previewPath, bytes);
 
             Assert.Empty(archive.LoadRecent(10));
+            Assert.Empty(Directory.GetFiles(folder, "*.tiff"));
             Assert.Empty(Directory.GetFiles(folder, "*.xrayraw"));
             Assert.Empty(Directory.GetFiles(folder, "*.bmp"));
             Assert.Empty(Directory.GetFiles(folder, "*.xraymeta.json"));

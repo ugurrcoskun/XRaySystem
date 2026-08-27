@@ -22,6 +22,17 @@ using XRaySystem.RemoteClient;
 
 namespace XRaySystem.Mobile.ViewModels;
 
+public enum MobileDialogSeverity
+{
+    Warning,
+    Error
+}
+
+public sealed record MobileDialogRequest(
+    string Title,
+    string Message,
+    MobileDialogSeverity Severity);
+
 public partial class MainViewModel : ObservableObject
 {
     private const double DefaultVoltageKv = 70.0;
@@ -56,6 +67,7 @@ public partial class MainViewModel : ObservableObject
 
     public event Action? ReviewImageOpened;
     public event Action<byte[], int, int>? PresentationFrameReady;
+    public event Action<MobileDialogRequest>? DialogRequested;
 
     private sealed record RenderRequest(RawGray16Frame Frame, int Center, int Width, long Version);
 
@@ -404,7 +416,10 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Invalid connection settings: {ex.Message}";
+            ReportError(
+                "Invalid Connection Settings",
+                $"Invalid connection settings: {ex.Message}",
+                MobileDialogSeverity.Warning);
         }
     }
 
@@ -423,7 +438,9 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"The API key could not be deleted: {ex.Message}";
+            ReportError(
+                "Credential Error",
+                $"The API key could not be deleted: {ex.Message}");
         }
     }
 
@@ -441,12 +458,16 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Secure connection credentials could not be read: {ex.Message}";
+            ReportError(
+                "Credential Error",
+                $"Secure connection credentials could not be read: {ex.Message}");
         }
         await databaseInitialization;
         if (_databaseInitialization.HasFailed)
         {
-            StatusMessage = "The local history database could not be initialized; saving and history are unavailable.";
+            ReportError(
+                "Local Storage Unavailable",
+                "The local history database could not be initialized; saving and history are unavailable.");
             return;
         }
         try
@@ -520,7 +541,7 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Connection failed: {ex.Message}";
+            ReportError("Connection Failed", $"Connection failed: {ex.Message}");
         }
         finally
         {
@@ -541,7 +562,7 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Disconnect failed: {ex.Message}";
+            ReportError("Disconnect Failed", $"Disconnect failed: {ex.Message}");
         }
         finally
         {
@@ -562,7 +583,7 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"GRAB could not start: {ex.Message}";
+            ReportError("GRAB Failed", $"GRAB could not start: {ex.Message}");
         }
         finally
         {
@@ -581,7 +602,7 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"GRAB could not be frozen: {ex.Message}";
+            ReportError("Freeze Failed", $"GRAB could not be frozen: {ex.Message}");
         }
     }
 
@@ -597,7 +618,7 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Abort failed: {ex.Message}";
+            ReportError("Stop Failed", $"Abort failed: {ex.Message}");
         }
     }
 
@@ -637,7 +658,7 @@ public partial class MainViewModel : ObservableObject
             measurement.SetRawImagePath(savedFiles.RawPath);
             await _saveMeasurement.ExecuteAsync(measurement);
             await RefreshHistoryAsync();
-            StatusMessage = $"SNAP saved and frozen for review · RAW + preview · {Path.GetFileNameWithoutExtension(savedFiles.RawPath)}. Select GRAB to continue.";
+            StatusMessage = $"SNAP saved and frozen for review · 16-bit TIFF + preview · {Path.GetFileNameWithoutExtension(savedFiles.RawPath)}. Select GRAB to continue.";
         }
         catch (OperationCanceledException)
         {
@@ -648,7 +669,7 @@ public partial class MainViewModel : ObservableObject
             var preserved = savedFiles is null
                 ? string.Empty
                 : " · RAW and preview files were preserved; the metadata record may be incomplete.";
-            StatusMessage = $"SNAP failed: {ex.Message}{preserved}";
+            ReportError("SNAP Failed", $"SNAP failed: {ex.Message}{preserved}");
         }
         finally
         {
@@ -697,7 +718,7 @@ public partial class MainViewModel : ObservableObject
                     (!string.IsNullOrWhiteSpace(item.ImagePath) &&
                      Path.GetExtension(item.ImagePath).Equals(".bmp", StringComparison.OrdinalIgnoreCase) &&
                      File.Exists(item.ImagePath)))
-                .Take(12)
+                .Take(30)
                 .ToList();
 
             RecentImages.Clear();
@@ -706,7 +727,10 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"History could not be loaded: {ex.Message}";
+            ReportError(
+                "History Unavailable",
+                $"History could not be loaded: {ex.Message}",
+                MobileDialogSeverity.Warning);
         }
         finally
         {
@@ -853,7 +877,7 @@ public partial class MainViewModel : ObservableObject
             {
                 try
                 {
-                    StatusMessage = "Downloading and verifying the full Gray16 source...";
+                    StatusMessage = "Downloading and verifying the full Gray16 TIFF source...";
                     var rawBytes = await _remoteDeviceClient.GetRawImageAsync(item.Id);
                     var measurement = RemoteImageMeasurementFactory.Create(remoteMetadata, rawBytes);
                     var rawPath = await Task.Run(() =>
@@ -874,7 +898,7 @@ public partial class MainViewModel : ObservableObject
                 Volatile.Write(ref _currentRawFrame, frame);
                 Interlocked.Increment(ref _renderVersion);
                 QueueLatestRender(frame);
-                FrameKindDisplay = "HISTORY · RAW";
+                FrameKindDisplay = "HISTORY · GRAY16 TIFF";
                 FrameMetadataText = $"{frame.Width} × {frame.Height} · GRAY16";
                 LastFrameTimeText = frame.Timestamp.ToLocalTime().ToString("dd.MM.yyyy · HH:mm:ss");
                 SetLastFrameTimestamp(frame.Timestamp);
@@ -910,7 +934,9 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"History image could not be opened: {ex.Message}";
+            ReportError(
+                "Image Review Failed",
+                $"History image could not be opened: {ex.Message}");
         }
         finally
         {
@@ -1100,6 +1126,21 @@ public partial class MainViewModel : ObservableObject
             return;
         MainThread.BeginInvokeOnMainThread(() =>
             StatusMessage = $"Image rendering failed: {exception.Message}");
+    }
+
+    private void ReportError(
+        string title,
+        string message,
+        MobileDialogSeverity severity = MobileDialogSeverity.Error)
+    {
+        void Publish()
+        {
+            StatusMessage = message;
+            DialogRequested?.Invoke(new MobileDialogRequest(title, message, severity));
+        }
+
+        if (MainThread.IsMainThread) Publish();
+        else MainThread.BeginInvokeOnMainThread(Publish);
     }
 
     private void SetCurrentImage(byte[] bmpBytes, int width, int height)

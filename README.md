@@ -15,13 +15,13 @@ XRaySystem, CMOS X-Ray dedektör görüntüsü ve telemetri akışını gerçek 
 
 Mimari ayrıntılar için `project.md`, uygulama sırası için `plan.md` kullanılmalıdır.
 
-Mobil snap kayıtları iki temsilden oluşur: hızlı listeleme için BMP önizleme ve asıl görüntü kaynağı olarak metadata ile SHA-256 bütünlük doğrulaması taşıyan sürümlü `.xrayraw` Gray16 dosyası. Mobil SQLite veritabanı ve görüntüler `FileSystem.AppDataDirectory` altında tutulur; WPF'nin kalıcı TIFF/SQLite geçmişiyle karışmaz.
+Mobil SNAP kayıtları iki temsilden oluşur: hızlı listeleme için BMP önizleme ve asıl görüntü kaynağı olarak metadata ile SHA-256 piksel bütünlük doğrulaması taşıyan kayıpsız 16-bit grayscale TIFF. Mobil SQLite veritabanı ve görüntüler `FileSystem.AppDataDirectory` altında tutulur; WPF'nin kalıcı TIFF/SQLite geçmişiyle karışmaz. Eski `.xrayraw` dosyaları yalnız geriye uyumlu okuma içindir; yeni kayıt üretilmez.
 
 Kaynağı, lisansı ve anonimleştirmesi doğrulanmamış `Infrastructure/SampleData` içeriği karantinadadır ve varsayılan WPF build/publish çıktısına alınmaz. Kontrollü geliştirme opt-in'i yalnız RAW + manifest içindir; DICOM kaynakları uygulama paketine hiçbir durumda kopyalanmaz.
 
 GitHub Actions CI, Linux üzerinde çekirdek testleri ve Windows üzerinde WPF derleme/Gray16 TIFF testini ayrı işler olarak çalıştırır. MAUI işi ilk temiz Android runtime doğrulamasından sonra eklenecektir; böylece henüz doğrulanmamış workload kurulumu CI sonucunu gizlemez.
 
-DeviceHost; REST cihaz komutları, SignalR status/telemetry olayları, HMAC/hash doğrulamalı kalıcı ortak acquisition kataloğu, cursor sayfalama, 768 px LOW BMP ve on-demand `.xrayraw` indirme sağlar. WPF tüm katalog geçmişini birleştirir; mobil LOW-first çalışır ve yerel cache'i son 30 kayıtla sınırlar. Production HTTPS zorlaması, API-key authentication, Viewer/Operator/Admin rol politikaları, doğrulanmış kimliğe bağlı command audit, idempotency ve tek aktif istemci lease'i eklenmiştir. Ayrıntılar `XRaySystem.DeviceHost/README.md` içindedir.
+DeviceHost; REST cihaz komutları, SignalR status/telemetry olayları, HMAC/hash doğrulamalı kalıcı ortak TIFF acquisition kataloğu, cursor sayfalama ve 768 px LOW BMP sağlar. Telefonda kurulu v2 istemci testi bitene kadar tam Gray16 remote transfer geçici olarak legacy v2 container kullanır; kalıcı PC/mobil kayıt formatı TIFF'tir. WPF tüm katalog geçmişini birleştirir; mobil LOW-first çalışır ve yerel cache'i son 30 kayıtla sınırlar. Production HTTPS zorlaması, API-key authentication, Viewer/Operator/Admin rol politikaları, doğrulanmış kimliğe bağlı command audit, idempotency ve tek aktif istemci lease'i eklenmiştir. Ayrıntılar `XRaySystem.DeviceHost/README.md` içindedir.
 
 `XRaySystem.RemoteClient`, status/telemetry olaylarını dinler, sequence tabanlı en güncel live BMP'yi indirir ve SNAP low/raw içeriklerini content-type doğrulamasıyla alır. `RemoteSensorService` bu hattı ortak `ISensorService` sözleşmesine uyarlar; böylece WPF ve MAUI aynı ViewModel/use case yapısıyla Local veya Remote çalışabilir. Gerçek uçtan uca kontrol `Tools/RemoteSmoke` ile yapılır.
 
